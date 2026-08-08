@@ -295,6 +295,7 @@ void Application::run() {
         .base_path = "/sounds",
         .partition_label = "sounds",
         .partition = nullptr,
+        .blockdev = nullptr,
         .format_if_mount_failed = true,
         .read_only = false,
         .dont_mount = false,
