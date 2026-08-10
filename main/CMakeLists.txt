@@ -45,6 +45,7 @@ idf_component_register(
         "src/config_store.cpp"
         "src/error_lookup.cpp"
         "src/network_arbiter.cpp"
+        "src/plugin_registry.cpp"
         "include/font/dosis_20.c"
         "include/font/dosis_32.c"
         "include/font/dosis_40.c"
