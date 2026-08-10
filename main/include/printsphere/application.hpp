@@ -1,13 +1,16 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 
 #include "printsphere/audio_notifier.hpp"
 #include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
 #include "printsphere/p1s_camera_client.hpp"
+#include "printsphere/plugin.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/printer_client.hpp"
+#include "printsphere/printer_plugin.hpp"
 #include "printsphere/setup_portal.hpp"
 #include "printsphere/serial_provisioner.hpp"
 #include "printsphere/ui.hpp"
@@ -22,6 +25,21 @@ class Application {
   void run();
 
  private:
+  friend class PrinterPlugin;
+
+  // Phase 5 adapter methods: same logic that used to live inline in run()'s
+  // loop, now called through the Plugin interface via printer_plugin_. See
+  // "Phased extraction sequencing plan" in CLAUDE.md. Everything these touch
+  // (cloud_client_, printer_client_, camera_client_, and all the hybrid/
+  // audio/override state below) stays an Application member until Phase 8 —
+  // only the call shape changed, not where the state lives.
+  esp_err_t printer_plugin_init(PluginContext& ctx);
+  void printer_plugin_tick(uint64_t now_ms);
+  void printer_plugin_update_ui();
+  bool printer_plugin_wants_network() const;
+  bool printer_plugin_wants_awake() const;
+  uint32_t printer_plugin_desired_poll_interval_ms() const;
+
   ConfigStore config_store_{};
   WifiManager wifi_manager_{};
   BambuCloudClient cloud_client_{};
@@ -60,6 +78,17 @@ class Application {
   int audio_last_print_error_code_ = 0;
   size_t audio_last_hms_count_ = 0;
   bool audio_state_primed_ = false;
+
+  // Phase 5: split of the old inline apply_snapshot() call — tick() computes
+  // and stores this, update_ui() pushes it to the widgets.
+  PrinterSnapshot latest_snapshot_{};
+  // Cached so desired_poll_interval_ms()/wants_awake() can answer without
+  // recomputing; set at the end of printer_plugin_tick() each iteration.
+  uint32_t printer_desired_poll_interval_ms_ = 1500;
+  bool printer_keep_screen_awake_ = false;
+
+  PrinterPlugin printer_plugin_;
+  std::array<Plugin*, kMaxPlugins> plugins_{};
 };
 
 }  // namespace printsphere

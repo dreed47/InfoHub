@@ -1,6 +1,8 @@
 #include "printsphere/application.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "driver/gpio.h"
@@ -241,7 +243,8 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 Application::Application()
     : setup_portal_(config_store_, wifi_manager_, cloud_client_, printer_client_, camera_client_,
                     ui_, pmu_manager_, audio_notifier_),
-      serial_provisioner_(config_store_, wifi_manager_) {
+      serial_provisioner_(config_store_, wifi_manager_),
+      printer_plugin_(*this) {
   cloud_client_.set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
   // local PrinterClient so it can collapse its reconnect backoff the moment the
@@ -250,6 +253,7 @@ Application::Application()
   cloud_client_.set_printer_presence_callback([this](bool online) {
     printer_client_.notify_cloud_presence(online);
   });
+  plugins_[0] = &printer_plugin_;
 }
 
 void Application::run() {
@@ -296,7 +300,6 @@ void Application::run() {
         .base_path = "/sounds",
         .partition_label = "sounds",
         .partition = nullptr,
-        .blockdev = nullptr,
         .format_if_mount_failed = true,
         .read_only = false,
         .dont_mount = false,
@@ -334,9 +337,56 @@ void Application::run() {
     ESP_LOGW(kTag, "Embedded error lookup unavailable; falling back to generic error text");
   }
 
-  const BambuCloudCredentials cloud_credentials = config_store_.load_cloud_credentials();
-  source_mode_ = config_store_.load_source_mode();
-  const PrinterConnection printer_connection = config_store_.load_active_printer_profile().to_connection();
+  // Phase 5: printer-specific bring-up now goes through the Plugin
+  // interface (see "Phased extraction sequencing plan" in CLAUDE.md).
+  // printer_plugin_init() below still does exactly what used to be inlined
+  // here (load cloud/source-mode/profile config, configure+start the three
+  // clients) — only the call shape changed.
+  PluginContext plugin_ctx{config_store_, wifi_manager_, ui_};
+  for (Plugin* plugin : plugins_) {
+    if (plugin == nullptr) {
+      continue;
+    }
+    ESP_ERROR_CHECK(plugin->init(plugin_ctx));
+  }
+
+  ESP_LOGI(kTag, "Bootstrap complete");
+
+  while (true) {
+    const uint64_t now_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+    if (ui_.consume_portal_unlock_request()) {
+      setup_portal_.request_unlock_pin();
+    }
+
+    for (Plugin* plugin : plugins_) {
+      if (plugin == nullptr) {
+        continue;
+      }
+      plugin->tick(now_ms);
+    }
+    for (Plugin* plugin : plugins_) {
+      if (plugin == nullptr) {
+        continue;
+      }
+      plugin->update_ui();
+    }
+
+    uint32_t min_poll_interval_ms = 1500;
+    for (Plugin* plugin : plugins_) {
+      if (plugin == nullptr) {
+        continue;
+      }
+      min_poll_interval_ms = std::min(min_poll_interval_ms, plugin->desired_poll_interval_ms());
+    }
+    wait_for_next_iteration(ui_, pdMS_TO_TICKS(min_poll_interval_ms));
+  }
+}
+
+esp_err_t Application::printer_plugin_init(PluginContext& ctx) {
+  const BambuCloudCredentials cloud_credentials = ctx.config_store.load_cloud_credentials();
+  source_mode_ = ctx.config_store.load_source_mode();
+  const PrinterConnection printer_connection =
+      ctx.config_store.load_active_printer_profile().to_connection();
   cloud_client_.configure(cloud_credentials, printer_connection.serial);
   ESP_ERROR_CHECK(cloud_client_.start());
 
@@ -344,15 +394,11 @@ void Application::run() {
   ESP_ERROR_CHECK(printer_client_.start());
   camera_client_.configure(printer_connection);
   ESP_ERROR_CHECK(camera_client_.start());
+  return ESP_OK;
+}
 
-  ESP_LOGI(kTag, "Bootstrap complete");
-
-  while (true) {
+void Application::printer_plugin_tick(uint64_t now_ms) {
     const TickType_t now_tick = xTaskGetTickCount();
-    const uint64_t now_ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
-    if (ui_.consume_portal_unlock_request()) {
-      setup_portal_.request_unlock_pin();
-    }
     const int switch_idx = ui_.consume_printer_switch_request();
     if (switch_idx >= 0 &&
         static_cast<uint8_t>(switch_idx) != config_store_.load_active_printer_index()) {
@@ -381,7 +427,6 @@ void Application::run() {
       }
       ui_.update_printer_cards(cards);
     }
-    const PortalAccessSnapshot portal_access = setup_portal_.access_snapshot();
     const bool wifi_connected = wifi_manager_.is_station_connected();
     const std::string wifi_ip = wifi_manager_.station_ip();
     const bool page_transition_active = ui_.is_page_transition_active();
@@ -704,13 +749,6 @@ void Application::run() {
     }
 
     resolve_ui_state(snapshot);
-    // Store portal state first (lock-free), then apply_snapshot uses it
-    // inside the same LVGL lock section — eliminates a separate lock acquisition.
-    ui_.set_portal_access_state(portal_access.lock_enabled,
-                                portal_access.request_authorized, portal_access.session_active,
-                                portal_access.pin_active, portal_access.pin_code,
-                                portal_access.pin_remaining_s, portal_access.session_remaining_s);
-    ui_.apply_snapshot(snapshot);
     // Audio-notification edge detection. Runs strictly off the merged
     // PrinterSnapshot so it sees the same view that the UI does - no double
     // beeps when cloud and local report the same transition.
@@ -775,16 +813,40 @@ void Application::run() {
                                      (on_battery && ui_.is_low_power_mode_active() &&
                                       !snapshot.print_active));
 
-    const TickType_t loop_delay =
+    printer_desired_poll_interval_ms_ =
         (snapshot.print_active || camera_page_active || page_transition_active ||
          !ui_.is_low_power_mode_active())
-            ? pdMS_TO_TICKS(page_transition_active ? 100 : 500)
-            : pdMS_TO_TICKS(1500);
+            ? (page_transition_active ? 100 : 500)
+            : 1500;
+    printer_keep_screen_awake_ = keep_screen_awake;
     last_source_mode_ = source_mode_;
     last_wifi_connected_ = wifi_connected;
     last_camera_page_active_ = camera_page_visible;
-    wait_for_next_iteration(ui_, loop_delay);
-  }
+
+    latest_snapshot_ = std::move(snapshot);
+}
+
+void Application::printer_plugin_update_ui() {
+  // Store portal state first (lock-free), then apply_snapshot uses it inside
+  // the same LVGL lock section — eliminates a separate lock acquisition.
+  const PortalAccessSnapshot portal_access = setup_portal_.access_snapshot();
+  ui_.set_portal_access_state(portal_access.lock_enabled, portal_access.request_authorized,
+                              portal_access.session_active, portal_access.pin_active,
+                              portal_access.pin_code, portal_access.pin_remaining_s,
+                              portal_access.session_remaining_s);
+  ui_.apply_snapshot(latest_snapshot_);
+}
+
+bool Application::printer_plugin_wants_network() const {
+  // Best-effort hint; NetworkArbiter is not wired into the connect call sites
+  // yet (Phase 2 follow-up), so nothing consumes this today.
+  return local_printer_enabled_;
+}
+
+bool Application::printer_plugin_wants_awake() const { return printer_keep_screen_awake_; }
+
+uint32_t Application::printer_plugin_desired_poll_interval_ms() const {
+  return printer_desired_poll_interval_ms_;
 }
 
 }  // namespace printsphere
