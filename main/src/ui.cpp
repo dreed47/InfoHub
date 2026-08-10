@@ -1333,11 +1333,8 @@ esp_err_t Ui::initialize() {
   ESP_RETURN_ON_ERROR(bsp_display_rotation_set(bsp_rotation_for(display_rotation_)), kTag,
                       "apply display rotation failed");
 
-  user_brightness_percent_ = -1;
-  applied_brightness_percent_ = -1;
-  screen_power_mode_ = ScreenPowerMode::kAwake;
-  last_activity_tick_ms_.store(lv_tick_get());
-  set_brightness_percent(kDefaultBrightnessPercent);
+  ui_shell_.reset_brightness_state();
+  ui_shell_.set_brightness_percent(kDefaultBrightnessPercent);
   ESP_RETURN_ON_ERROR(build_dashboard(), kTag, "build_dashboard failed");
 
   // With LV_SCROLL_SNAP_NONE the pager decelerates freely after finger release.
@@ -1501,11 +1498,11 @@ int Ui::consume_printer_switch_request() {
 }
 
 void Ui::apply_page0_parallax(bool force) {
-  if (page0_title_ == nullptr || page0_card_list_ == nullptr || pager_ == nullptr) {
+  if (page0_title_ == nullptr || page0_card_list_ == nullptr || ui_shell_.pager() == nullptr) {
     return;
   }
 
-  int scroll_x = lv_obj_get_scroll_x(pager_);
+  int scroll_x = lv_obj_get_scroll_x(ui_shell_.pager());
   if (scroll_x < 0) scroll_x = 0;
 
   const int page_w = board::kDisplayWidth;
@@ -2798,22 +2795,23 @@ esp_err_t Ui::build_dashboard() {
   const lv_font_t* mdi30 = &mdi_30;
   const lv_font_t* mdi40 = &mdi_40;
 
-  pager_ = lv_obj_create(screen_);
-  lv_obj_set_size(pager_, board::kDisplayWidth, board::kDisplayHeight);
-  lv_obj_center(pager_);
-  make_transparent(pager_);
-  apply_display_rotation_visual_offset(pager_, display_rotation_);
-  lv_obj_set_style_pad_column(pager_, 0, 0);
-  lv_obj_set_style_pad_row(pager_, 0, 0);
-  enable_touch_bubble(pager_);
-  lv_obj_set_flex_flow(pager_, LV_FLEX_FLOW_ROW);
-  lv_obj_set_scroll_dir(pager_, LV_DIR_HOR);
+  lv_obj_t* pager = lv_obj_create(screen_);
+  lv_obj_set_size(pager, board::kDisplayWidth, board::kDisplayHeight);
+  lv_obj_center(pager);
+  make_transparent(pager);
+  apply_display_rotation_visual_offset(pager, display_rotation_);
+  lv_obj_set_style_pad_column(pager, 0, 0);
+  lv_obj_set_style_pad_row(pager, 0, 0);
+  enable_touch_bubble(pager);
+  lv_obj_set_flex_flow(pager, LV_FLEX_FLOW_ROW);
+  lv_obj_set_scroll_dir(pager, LV_DIR_HOR);
   // LV_SCROLL_SNAP_NONE: we handle page snapping ourselves in handle_pager_event.
   // LV_SCROLL_SNAP_CENTER would make LVGL launch its own snap animation that conflicts
   // with our set_active_page() call, causing double-animation jitter and page-skip bugs.
-  lv_obj_set_scroll_snap_x(pager_, LV_SCROLL_SNAP_NONE);
-  lv_obj_set_scrollbar_mode(pager_, LV_SCROLLBAR_MODE_OFF);
-  lv_obj_add_event_cb(pager_, &Ui::pager_event_cb, LV_EVENT_ALL, this);
+  lv_obj_set_scroll_snap_x(pager, LV_SCROLL_SNAP_NONE);
+  lv_obj_set_scrollbar_mode(pager, LV_SCROLLBAR_MODE_OFF);
+  lv_obj_add_event_cb(pager, &Ui::pager_event_cb, LV_EVENT_ALL, this);
+  ui_shell_.bind_pager(pager);
 
   auto create_page = [](lv_obj_t* parent) {
     lv_obj_t* page = lv_obj_create(parent);
@@ -2823,15 +2821,15 @@ esp_err_t Ui::build_dashboard() {
     return page;
   };
 
-  page0_ = create_page(pager_);
+  page0_ = create_page(pager);
   for (int u = 0; u < kMaxAmsUnits; ++u) {
-    ams_pages_[u] = create_page(pager_);
+    ams_pages_[u] = create_page(pager);
     enable_touch_bubble(ams_pages_[u]);
   }
-  page1_ = create_page(pager_);
-  page2_ = create_page(pager_);
-  page3_ = create_page(pager_);
-  page4_ = create_page(pager_);
+  page1_ = create_page(pager);
+  page2_ = create_page(pager);
+  page3_ = create_page(pager);
+  page4_ = create_page(pager);
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
@@ -3269,7 +3267,7 @@ esp_err_t Ui::build_dashboard() {
   register_page_slots();
 
   lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
-  lv_obj_update_layout(pager_);
+  lv_obj_update_layout(ui_shell_.pager());
   lv_obj_scroll_to_view(page1_, LV_ANIM_OFF);
 
   active_page_ = kPageIdxMain;
@@ -3409,7 +3407,7 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
   }
 
   active_page_ = clamp_enabled_page(active_page_);
-  lv_obj_update_layout(pager_);
+  lv_obj_update_layout(ui_shell_.pager());
   if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
     lv_obj_scroll_to_view(target_page, LV_ANIM_OFF);
   }
@@ -3420,101 +3418,37 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
 }
 
 void Ui::register_page_slots() {
-  page_slots_[kPageIdxPrinterSelect] = {&page0_, nullptr};
+  ui_shell_.register_page_slot(kPageIdxPrinterSelect, &page0_, nullptr);
   for (int u = 0; u < kMaxAmsUnits; ++u) {
-    page_slots_[kPageIdxAmsFirst + u] = {&ams_pages_[u], &ams_unit_present_[u]};
+    ui_shell_.register_page_slot(kPageIdxAmsFirst + u, &ams_pages_[u], &ams_unit_present_[u]);
   }
-  page_slots_[kPageIdxMain] = {&page1_, nullptr};
-  page_slots_[kPageIdxPreview] = {&page2_, &preview_page_available_};
-  page_slots_[kPageIdxCamera] = {&page3_, &camera_page_available_};
-  page_slots_[kPageIdxCredits] = {&page4_, nullptr};
+  ui_shell_.register_page_slot(kPageIdxMain, &page1_, nullptr);
+  ui_shell_.register_page_slot(kPageIdxPreview, &page2_, &preview_page_available_);
+  ui_shell_.register_page_slot(kPageIdxCamera, &page3_, &camera_page_available_);
+  ui_shell_.register_page_slot(kPageIdxCredits, &page4_, nullptr);
 }
 
-bool Ui::page_enabled(int page) const {
-  if (page < 0 || page >= static_cast<int>(page_slots_.size())) {
-    return false;
-  }
-  const PageSlot& slot = page_slots_[page];
-  return slot.enabled_flag == nullptr || *slot.enabled_flag;
-}
-
-lv_obj_t* Ui::page_object(int page) const {
-  if (page < 0 || page >= static_cast<int>(page_slots_.size())) {
-    return nullptr;
-  }
-  const PageSlot& slot = page_slots_[page];
-  return slot.object != nullptr ? *slot.object : nullptr;
-}
+lv_obj_t* Ui::page_object(int page) const { return ui_shell_.page_object(page); }
 
 int Ui::next_enabled_page(int page, int direction) const {
-  int candidate = page + direction;
-  while (candidate >= 0 && candidate <= kPageIdxLast) {
-    if (page_enabled(candidate)) {
-      return candidate;
-    }
-    candidate += direction;
-  }
-  return page;
+  return ui_shell_.next_enabled_page(page, direction);
 }
 
-int Ui::clamp_enabled_page(int page) const {
-  if (page_enabled(page)) {
-    return page;
-  }
-
-  for (int candidate = 0; candidate <= kPageIdxLast; ++candidate) {
-    if (page_enabled(candidate)) {
-      return candidate;
-    }
-  }
-
-  return 0;
-}
+int Ui::clamp_enabled_page(int page) const { return ui_shell_.clamp_enabled_page(page); }
 
 int Ui::nearest_enabled_page_for_scroll() const {
-  lv_obj_update_layout(pager_);
-  int scroll_x = lv_obj_get_scroll_x(pager_);
-  if (scroll_x < 0) {
-    scroll_x = -scroll_x;
-  }
-
-  // With LV_SCROLL_SNAP_NONE + scroll_throw=90, the throw decays in ~3 ticks so
-  // scroll_x already reflects the post-throw resting position when SCROLL_END fires.
-  // Simply pick whichever page center is closest to the viewport center.
-  const int viewport_center = scroll_x + (board::kDisplayWidth / 2);
-  int best_page = clamp_enabled_page(active_page_);
-  int best_distance = INT32_MAX;
-
-  for (int page = 0; page <= kPageIdxLast; ++page) {
-    if (!page_enabled(page)) {
-      continue;
-    }
-
-    lv_obj_t* object = page_object(page);
-    if (object == nullptr) {
-      continue;
-    }
-
-    const int page_center = lv_obj_get_x(object) + (board::kDisplayWidth / 2);
-    const int distance = std::abs(page_center - viewport_center);
-    if (distance < best_distance) {
-      best_distance = distance;
-      best_page = page;
-    }
-  }
-
-  return best_page;
+  return ui_shell_.nearest_enabled_page_for_scroll(active_page_);
 }
 
 void Ui::set_active_page(int page) {
   const int clamped_page = clamp_enabled_page(page);
   const int previous_page = active_page_;
-  lv_obj_update_layout(pager_);
+  lv_obj_update_layout(ui_shell_.pager());
   if (lv_obj_t* target_page = page_object(clamped_page); target_page != nullptr) {
     // lv_obj_scroll_to_view can leave a small residual offset depending on
     // scroll direction.  Use the page's exact x-position for a pixel-perfect snap.
     const int target_x = lv_obj_get_x(target_page);
-    lv_obj_scroll_to_x(pager_, target_x, LV_ANIM_OFF);
+    lv_obj_scroll_to_x(ui_shell_.pager(), target_x, LV_ANIM_OFF);
   }
   active_page_ = clamped_page;
   if (clamped_page == 0 && previous_page != 0) {
@@ -3541,24 +3475,20 @@ void Ui::set_active_page(int page) {
 }
 
 void Ui::set_pager_scroll_locked(bool locked) {
-  if (pager_ == nullptr || pager_scroll_locked_ == locked) {
-    return;
-  }
+  const bool was_locked = ui_shell_.pager_scroll_locked();
+  ui_shell_.set_pager_scroll_locked(locked);
 
-  pager_scroll_locked_ = locked;
-  lv_obj_set_scroll_dir(pager_, locked ? LV_DIR_NONE : LV_DIR_HOR);
-
-  if (!locked) {
+  if (ui_shell_.pager() == nullptr || !locked || was_locked) {
     return;
   }
 
   // Snap back to the currently active page as soon as brightness control wins
   // the gesture, so a slightly diagonal drag doesn't leave the pager half-way
   // between pages.
-  lv_obj_update_layout(pager_);
+  lv_obj_update_layout(ui_shell_.pager());
   if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
     const int target_x = lv_obj_get_x(target_page);
-    lv_obj_scroll_to_x(pager_, target_x, LV_ANIM_OFF);
+    lv_obj_scroll_to_x(ui_shell_.pager(), target_x, LV_ANIM_OFF);
   }
   scrolling_ = false;
   publish_page_state_snapshot();
@@ -3574,7 +3504,7 @@ void Ui::publish_page_state_snapshot() {
 void Ui::handle_pager_event(lv_event_t* event) {
   const lv_event_code_t code = lv_event_get_code(event);
 
-  if (pager_scroll_locked_) {
+  if (ui_shell_.pager_scroll_locked()) {
     return;
   }
 
@@ -3602,7 +3532,7 @@ void Ui::handle_pager_event(lv_event_t* event) {
     return;
   }
 
-  int scroll_x = lv_obj_get_scroll_x(pager_);
+  int scroll_x = lv_obj_get_scroll_x(ui_shell_.pager());
   if (scroll_x < 0) {
     scroll_x = -scroll_x;
   }
@@ -3647,7 +3577,7 @@ void Ui::handle_pager_event(lv_event_t* event) {
   if (lv_obj_t* snap_target = page_object(snap_page); snap_target != nullptr) {
     const int target_x = lv_obj_get_x(snap_target);
     if (std::abs(scroll_x - target_x) > 1) {
-      lv_obj_scroll_to_x(pager_, target_x, LV_ANIM_ON);
+      lv_obj_scroll_to_x(ui_shell_.pager(), target_x, LV_ANIM_ON);
       return;
     }
   }
@@ -3671,7 +3601,7 @@ void Ui::handle_screen_event(lv_event_t* event) {
 
   if (code == LV_EVENT_PRESSED) {
     set_pager_scroll_locked(false);
-    if (screen_power_mode_ == ScreenPowerMode::kOff) {
+    if (ui_shell_.screen_power_mode() == ScreenPowerMode::kOff) {
       // First touch wakes the screen; a second touch performs UI actions.
       note_activity(true);
       gesture_active_ = false;
@@ -3686,7 +3616,7 @@ void Ui::handle_screen_event(lv_event_t* event) {
     overlay_visible_ = false;
     gesture_start_x_ = point.x;
     gesture_start_y_ = point.y;
-    gesture_start_brightness_ = user_brightness_percent_;
+    gesture_start_brightness_ = ui_shell_.brightness_percent();
     return;
   }
 
@@ -3728,10 +3658,10 @@ void Ui::handle_screen_event(lv_event_t* event) {
     const int new_brightness =
         std::clamp(gesture_start_brightness_ + static_cast<int>(std::lround(delta)),
                    kManualMinBrightnessPercent, 100);
-    set_brightness_percent(new_brightness);
+    ui_shell_.set_brightness_percent(new_brightness);
 
     char buffer[8] = {};
-    std::snprintf(buffer, sizeof(buffer), "%d%%", user_brightness_percent_);
+    std::snprintf(buffer, sizeof(buffer), "%d%%", ui_shell_.brightness_percent());
     set_label_text_if_changed(brightness_overlay_, buffer);
     lv_obj_clear_flag(brightness_overlay_, LV_OBJ_FLAG_HIDDEN);
     overlay_visible_ = true;
@@ -3886,135 +3816,22 @@ void Ui::update_print_buttons_locked(const PrinterSnapshot& snapshot) {
   lv_obj_set_style_bg_opa(page2_stop_button_, pause_opa, 0);
 }
 
-void Ui::set_brightness_percent(int brightness_percent) {
-  const int clamped = std::clamp(brightness_percent, 0, 100);
-  if (user_brightness_percent_ == clamped) {
-    return;
-  }
+// Phase 6/9: dimming/brightness/power-save logic moved to UiShell. These
+// stay as thin delegates so the many printer-content call sites in this
+// file (note_activity in particular) don't need touching.
+void Ui::note_activity(bool wake_display_now) { ui_shell_.note_activity(wake_display_now); }
 
-  user_brightness_percent_ = clamped;
-  apply_brightness_policy();
-}
-
-void Ui::note_activity(bool wake_display_now) {
-  last_activity_tick_ms_.store(lv_tick_get());
-  if (wake_display_now) {
-    wake_display();
-  }
-}
-
-void Ui::wake_display() {
-  if (screen_power_mode_ == ScreenPowerMode::kAwake) {
-    return;
-  }
-
-  const bool was_off = screen_power_mode_ == ScreenPowerMode::kOff;
-  screen_power_mode_ = ScreenPowerMode::kAwake;
-  apply_brightness_policy();
-  if (was_off) {
-    esp_lv_adapter_resume();
-  }
-}
-
-void Ui::request_wake_display() {
-  note_activity(true);
-}
+void Ui::request_wake_display() { ui_shell_.note_activity(true); }
 
 void Ui::set_battery_display_policy(const BatteryDisplayPolicy& policy) {
-  battery_display_policy_ = policy;
-}
-
-void Ui::apply_brightness_policy() {
-  int target_brightness = user_brightness_percent_;
-  if (screen_power_mode_ == ScreenPowerMode::kDimmed) {
-    if (battery_display_policy_.dim_brightness_percent > 0) {
-      target_brightness = std::clamp(battery_display_policy_.dim_brightness_percent, 1, 100);
-    } else {
-      target_brightness = std::max(8, std::min(18, std::max(1, user_brightness_percent_ / 3)));
-    }
-  } else if (screen_power_mode_ == ScreenPowerMode::kOff) {
-    target_brightness = 0;
-  }
-
-  if (applied_brightness_percent_ == target_brightness) {
-    return;
-  }
-
-  applied_brightness_percent_ = target_brightness;
-  bsp_display_brightness_set(target_brightness);
+  ui_shell_.set_battery_display_policy(policy);
 }
 
 void Ui::update_power_save(bool on_battery, bool keep_awake, bool print_active) {
-  const uint32_t now = lv_tick_get();
-  const uint32_t idle_ms = now - last_activity_tick_ms_.load();
-
-  // While the LVGL worker is paused (screen off), LVGL touch events are not
-  // processed.  Poll the raw touch-interrupt GPIO so a finger press can still
-  // wake the display.  CST9217 pulls INT (GPIO 11) low on contact.
-  if (screen_power_mode_ == ScreenPowerMode::kOff &&
-      gpio_get_level(BSP_LCD_TOUCH_INT) == 0) {
-    note_activity(true);  // updates last_activity_tick_ms_ + calls wake_display()
-    return;               // re-evaluate on next call with fresh idle_ms
-  }
-
-  // print_active only selects the "during print" timeouts — it must NOT
-  // suppress dimming/screen-off (v1.6 regression: print_active was folded
-  // into keep_awake, which made the *_active_s policy timeouts dead code).
-  const uint32_t dim_timeout = (print_active
-      ? battery_display_policy_.dim_timeout_active_s
-      : battery_display_policy_.dim_timeout_idle_s) * 1000U;
-  const uint32_t off_timeout = (print_active
-      ? battery_display_policy_.off_timeout_active_s
-      : battery_display_policy_.off_timeout_idle_s) * 1000U;
-
-  ScreenPowerMode target_mode = ScreenPowerMode::kAwake;
-  if (!keep_awake && (on_battery || battery_display_policy_.usb_power_save_enabled)) {
-    if (battery_display_policy_.screen_off_enabled && idle_ms >= off_timeout) {
-      target_mode = ScreenPowerMode::kOff;
-    } else if (battery_display_policy_.dim_enabled && idle_ms >= dim_timeout) {
-      target_mode = ScreenPowerMode::kDimmed;
-    }
-  }
-
-  if (screen_power_mode_ != target_mode) {
-    const bool was_off = screen_power_mode_ == ScreenPowerMode::kOff;
-    const bool going_off = target_mode == ScreenPowerMode::kOff;
-    screen_power_mode_ = target_mode;
-
-    // IMPORTANT: When turning the screen off, pause the LVGL worker BEFORE
-    // setting brightness to 0.  The AMOLED panel stops generating the TE
-    // signal on GPIO13 at brightness 0.  If lv_timer_handler() is in the
-    // flush path it will block forever on xSemaphoreTake(te_vsync_sem,
-    // portMAX_DELAY).  Pausing first ensures the worker finishes its current
-    // render cycle (while TE is still active) and then idles.
-    //
-    // If pause times out (worker stuck in flush), we must NOT kill the TE
-    // signal — that would permanently deadlock the worker.  Instead, abort
-    // the screen-off transition and stay in the current power mode.
-    if (going_off && !was_off) {
-      esp_err_t pause_ret = esp_lv_adapter_pause(1000);
-      if (pause_ret != ESP_OK) {
-        ESP_LOGW(kTag, "LVGL worker pause timeout — aborting screen-off to avoid TE deadlock (%s)",
-                 esp_err_to_name(pause_ret));
-        // Treat a failed screen-off attempt like fresh activity so we don't
-        // immediately hammer pause() again on the next main-loop iteration.
-        last_activity_tick_ms_.store(now);
-        screen_power_mode_ = was_off ? ScreenPowerMode::kOff : ScreenPowerMode::kAwake;
-        return;
-      }
-    }
-
-    apply_brightness_policy();
-
-    if (was_off && !going_off) {
-      esp_lv_adapter_resume();
-    }
-  }
+  ui_shell_.update_power_save(on_battery, keep_awake, print_active);
 }
 
-bool Ui::is_low_power_mode_active() const {
-  return screen_power_mode_ != ScreenPowerMode::kAwake;
-}
+bool Ui::is_low_power_mode_active() const { return ui_shell_.is_low_power_mode_active(); }
 
 void Ui::pager_event_cb(lv_event_t* event) {
   auto* ui = static_cast<Ui*>(lv_event_get_user_data(event));

@@ -12,14 +12,9 @@
 #include "esp_err.h"
 #include "printsphere/config_store.hpp"
 #include "printsphere/printer_state.hpp"
+#include "printsphere/ui_shell.hpp"
 
 namespace printsphere {
-
-enum class ScreenPowerMode : uint8_t {
-  kAwake,
-  kDimmed,
-  kOff,
-};
 
 class Ui {
  public:
@@ -51,7 +46,7 @@ class Ui {
   void update_power_save(bool on_battery, bool keep_awake, bool print_active);
   void set_battery_display_policy(const BatteryDisplayPolicy& policy);
   bool is_low_power_mode_active() const;
-  ScreenPowerMode screen_power_mode() const { return screen_power_mode_; }
+  ScreenPowerMode screen_power_mode() const { return ui_shell_.screen_power_mode(); }
   bool is_config_page_active() const {
     return !page_scrolling_snapshot_.load(std::memory_order_relaxed) &&
            active_page_snapshot_.load(std::memory_order_relaxed) == kPageIdxPrinterSelect;
@@ -99,18 +94,18 @@ class Ui {
   void request_wake_display();
 
  private:
-  // Phase 6 (plugin-architecture extraction, see CLAUDE.md): page_enabled()/
-  // page_object() below are table-driven instead of a hardcoded if-chain over
-  // kPageIdx* constants. register_page_slots() builds the table once every
-  // page object exists. This is a stepping stone toward the sketch's public
-  // register_pages(plugin_id, count) API (Phase 8) — for now it still encodes
-  // exactly the same single printer page set, same order, same behavior.
-  struct PageSlot {
-    lv_obj_t* const* object = nullptr;        // address of the Ui member holding the object
-    const bool* enabled_flag = nullptr;       // nullptr means "always enabled"
-  };
+  // Phase 6/9 (plugin-architecture extraction, see CLAUDE.md "Ui changes
+  // sketch"): UiShell owns page-index bookkeeping (page_enabled()/
+  // page_object() below just delegate to it — register_page_slots() still
+  // orchestrates building the table since it needs addresses of Ui's own
+  // content-owned page objects) and the dimming/brightness/power-save state
+  // machine. Everything here still encodes exactly the same single printer
+  // page set, same order, same behavior — a relocation, not a redesign.
+  // active_page_/scrolling_ deliberately were NOT moved: they're read by
+  // ~15 printer-content call sites (apply_snapshot_locked alone) that would
+  // need touching for no functional benefit this pass.
+  UiShell ui_shell_{};
   void register_page_slots();
-  std::array<PageSlot, kPageIdxLast + 1> page_slots_{};
 
   esp_err_t build_dashboard();
   void apply_ring_visual_locked(const PrinterSnapshot& snapshot);
@@ -125,23 +120,21 @@ class Ui {
   void apply_page_visibility();
   void apply_logo_visibility();
   void update_page_availability_locked(const PrinterSnapshot& snapshot);
+  // Delegate to ui_shell_ — kept as same-named/same-signature Ui methods so
+  // the many printer-content call sites below don't need touching.
   void note_activity(bool wake_display);
-  void wake_display();
-  void apply_brightness_policy();
   void set_pager_scroll_locked(bool locked);
   void set_active_page(int page);
   void publish_page_state_snapshot();
   int clamp_enabled_page(int page) const;
   int next_enabled_page(int page, int direction) const;
   int nearest_enabled_page_for_scroll() const;
-  bool page_enabled(int page) const;
   lv_obj_t* page_object(int page) const;
   void handle_pager_event(lv_event_t* event);
   void handle_screen_event(lv_event_t* event);
   void handle_logo_event(lv_event_t* event);
   void update_portal_access_visuals_locked();
   void compute_portal_texts_locked();
-  void set_brightness_percent(int brightness_percent);
   void stop_ring_animations_locked();
   // Build a single AMS-unit page (widgets attached to ams_pages_[unit_idx]).
   // unit_idx 0 also receives the external-spool widgets.
@@ -169,7 +162,6 @@ class Ui {
   bool initialized_ = false;
   lv_display_t* display_ = nullptr;
   lv_obj_t* screen_ = nullptr;
-  lv_obj_t* pager_ = nullptr;
   lv_obj_t* fixed_overlay_ = nullptr;
   lv_obj_t* page0_ = nullptr;
   lv_obj_t* page0_title_ = nullptr;
@@ -276,8 +268,6 @@ class Ui {
   lv_obj_t* portal_overlay_value_ = nullptr;
   lv_obj_t* portal_overlay_detail_ = nullptr;
   lv_timer_t* ring_anim_timer_ = nullptr;  // unused, ambient sweep timer removed
-  int user_brightness_percent_ = 80;
-  int applied_brightness_percent_ = -1;
   bool gesture_active_ = false;
   bool overlay_visible_ = false;
   bool scrolling_ = false;
@@ -295,7 +285,6 @@ class Ui {
   bool bed_aux_visible_ = false;
   bool ring_animation_active_ = false;
   bool swipe_switched_ = false;
-  bool pager_scroll_locked_ = false;
   // Toggled by tapping the remaining-time row on page1: when true the row
   // shows the predicted finish wall-clock time instead of the remaining
   // duration. The clock-icon prefix is hidden in ETA mode to make room.
@@ -319,8 +308,6 @@ class Ui {
   uint32_t last_ring_indicator_hex_ = UINT32_MAX;
   uint32_t last_ring_text_hex_ = UINT32_MAX;
   uint32_t last_rendered_ams_signature_ = UINT32_MAX;
-  std::atomic<uint32_t> last_activity_tick_ms_{0};
-  ScreenPowerMode screen_power_mode_ = ScreenPowerMode::kAwake;
   std::string last_ui_status_;
   bool last_print_active_ = false;
   std::string last_diag_status_;
@@ -359,7 +346,6 @@ class Ui {
   PrinterSnapshot last_snapshot_{};
   DisplayRotation display_rotation_ = DisplayRotation::k0;
   int display_tilt_deci_deg_ = 0;
-  BatteryDisplayPolicy battery_display_policy_{};
 };
 
 }  // namespace printsphere

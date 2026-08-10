@@ -63,6 +63,7 @@ idf_component_register(
         "src/status_resolver.cpp"
         "src/time_sync.cpp"
         "src/ui.cpp"
+        "src/ui_shell.cpp"
         "src/wifi_manager.cpp"
     INCLUDE_DIRS
         "include"
