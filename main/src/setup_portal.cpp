@@ -1041,252 +1041,59 @@ esp_err_t SetupPortal::start() {
 
   ESP_RETURN_ON_ERROR(httpd_start(&server_, &config), kTag, "httpd_start failed");
 
-  httpd_uri_t root_uri = {};
-  root_uri.uri = "/";
-  root_uri.method = HTTP_GET;
-  root_uri.handler = &SetupPortal::handle_root;
-  root_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &root_uri), kTag, "root handler failed");
+  // Phase 7 (plugin-architecture extraction, see CLAUDE.md): route registration
+  // is table-driven instead of ~30 hand-written httpd_uri_t + register blocks.
+  // Same URIs, same methods, same handlers, same registration order — zero
+  // behavior change. This is the shape a future plugin's register_portal_routes()
+  // reuses instead of enumerating routes by hand in start().
+  struct RouteEntry {
+    const char* uri;
+    httpd_method_t method;
+    esp_err_t (*handler)(httpd_req_t*);
+  };
+  static constexpr RouteEntry kRoutes[] = {
+      {"/", HTTP_GET, &SetupPortal::handle_root},
+      {"/favicon.ico", HTTP_GET, &SetupPortal::handle_favicon},
+      {"/api/health", HTTP_GET, &SetupPortal::handle_health},
+      {"/api/unlock", HTTP_POST, &SetupPortal::handle_unlock},
+      {"/api/wifi/scan", HTTP_GET, &SetupPortal::handle_wifi_scan},
+      {"/api/config", HTTP_GET, &SetupPortal::handle_config_get},
+      {"/api/config", HTTP_POST, &SetupPortal::handle_config_post},
+      {"/api/arc/preview", HTTP_POST, &SetupPortal::handle_arc_preview},
+      {"/api/arc/commit", HTTP_POST, &SetupPortal::handle_arc_commit},
+      {"/api/source-mode", HTTP_POST, &SetupPortal::handle_source_mode_post},
+      {"/api/display-rotation", HTTP_POST, &SetupPortal::handle_display_rotation_post},
+      {"/api/battery-display", HTTP_POST, &SetupPortal::handle_battery_display_post},
+      {"/api/portal-access", HTTP_POST, &SetupPortal::handle_portal_access_post},
+      {"/api/ams-display", HTTP_POST, &SetupPortal::handle_ams_display_post},
+      {"/api/timezone", HTTP_POST, &SetupPortal::handle_timezone_post},
+      {"/api/audio", HTTP_POST, &SetupPortal::handle_audio_post},
+      {"/api/audio/event", HTTP_POST, &SetupPortal::handle_audio_event_post},
+      {"/api/audio/upload", HTTP_POST, &SetupPortal::handle_audio_upload},
+      {"/api/audio/clear", HTTP_POST, &SetupPortal::handle_audio_clear},
+      {"/api/cloud/connect", HTTP_POST, &SetupPortal::handle_cloud_connect},
+      {"/api/cloud/verify", HTTP_POST, &SetupPortal::handle_cloud_verify},
+      {"/api/local/connect", HTTP_POST, &SetupPortal::handle_local_connect},
+      {"/api/printers", HTTP_GET, &SetupPortal::handle_printers_get},
+      {"/api/printers/select", HTTP_POST, &SetupPortal::handle_printers_select},
+      {"/api/printers/save", HTTP_POST, &SetupPortal::handle_printers_save},
+      {"/api/printers/delete", HTTP_POST, &SetupPortal::handle_printers_delete},
+      {"/api/printers/clear-local", HTTP_POST, &SetupPortal::handle_printers_clear_local},
+      {"/api/session/extend", HTTP_POST, &SetupPortal::handle_session_extend},
+      {"/api/ota/upload", HTTP_POST, &SetupPortal::handle_ota_upload},
+      {"/api/ota/url", HTTP_POST, &SetupPortal::handle_ota_url},
+      {"/api/ota/status", HTTP_GET, &SetupPortal::handle_ota_status},
+  };
 
-  httpd_uri_t favicon_uri = {};
-  favicon_uri.uri = "/favicon.ico";
-  favicon_uri.method = HTTP_GET;
-  favicon_uri.handler = &SetupPortal::handle_favicon;
-  favicon_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &favicon_uri), kTag,
-                      "favicon handler failed");
-
-  httpd_uri_t health_uri = {};
-  health_uri.uri = "/api/health";
-  health_uri.method = HTTP_GET;
-  health_uri.handler = &SetupPortal::handle_health;
-  health_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &health_uri), kTag,
-                      "health handler failed");
-
-  httpd_uri_t unlock_uri = {};
-  unlock_uri.uri = "/api/unlock";
-  unlock_uri.method = HTTP_POST;
-  unlock_uri.handler = &SetupPortal::handle_unlock;
-  unlock_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &unlock_uri), kTag,
-                      "unlock handler failed");
-
-  httpd_uri_t wifi_scan_uri = {};
-  wifi_scan_uri.uri = "/api/wifi/scan";
-  wifi_scan_uri.method = HTTP_GET;
-  wifi_scan_uri.handler = &SetupPortal::handle_wifi_scan;
-  wifi_scan_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &wifi_scan_uri), kTag,
-                      "wifi scan handler failed");
-
-  httpd_uri_t config_get_uri = {};
-  config_get_uri.uri = "/api/config";
-  config_get_uri.method = HTTP_GET;
-  config_get_uri.handler = &SetupPortal::handle_config_get;
-  config_get_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &config_get_uri), kTag,
-                      "config get handler failed");
-
-  httpd_uri_t config_post_uri = {};
-  config_post_uri.uri = "/api/config";
-  config_post_uri.method = HTTP_POST;
-  config_post_uri.handler = &SetupPortal::handle_config_post;
-  config_post_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &config_post_uri), kTag,
-                      "config post handler failed");
-
-  httpd_uri_t arc_preview_uri = {};
-  arc_preview_uri.uri = "/api/arc/preview";
-  arc_preview_uri.method = HTTP_POST;
-  arc_preview_uri.handler = &SetupPortal::handle_arc_preview;
-  arc_preview_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &arc_preview_uri), kTag,
-                      "arc preview handler failed");
-
-  httpd_uri_t arc_commit_uri = {};
-  arc_commit_uri.uri = "/api/arc/commit";
-  arc_commit_uri.method = HTTP_POST;
-  arc_commit_uri.handler = &SetupPortal::handle_arc_commit;
-  arc_commit_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &arc_commit_uri), kTag,
-                      "arc commit handler failed");
-
-  httpd_uri_t source_mode_uri = {};
-  source_mode_uri.uri = "/api/source-mode";
-  source_mode_uri.method = HTTP_POST;
-  source_mode_uri.handler = &SetupPortal::handle_source_mode_post;
-  source_mode_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &source_mode_uri), kTag,
-                      "source mode handler failed");
-
-  httpd_uri_t display_rotation_uri = {};
-  display_rotation_uri.uri = "/api/display-rotation";
-  display_rotation_uri.method = HTTP_POST;
-  display_rotation_uri.handler = &SetupPortal::handle_display_rotation_post;
-  display_rotation_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &display_rotation_uri), kTag,
-                      "display rotation handler failed");
-
-  httpd_uri_t battery_display_uri = {};
-  battery_display_uri.uri = "/api/battery-display";
-  battery_display_uri.method = HTTP_POST;
-  battery_display_uri.handler = &SetupPortal::handle_battery_display_post;
-  battery_display_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &battery_display_uri), kTag,
-                      "battery display handler failed");
-
-  httpd_uri_t portal_access_uri = {};
-  portal_access_uri.uri = "/api/portal-access";
-  portal_access_uri.method = HTTP_POST;
-  portal_access_uri.handler = &SetupPortal::handle_portal_access_post;
-  portal_access_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &portal_access_uri), kTag,
-                      "portal access handler failed");
-
-  httpd_uri_t ams_display_uri = {};
-  ams_display_uri.uri = "/api/ams-display";
-  ams_display_uri.method = HTTP_POST;
-  ams_display_uri.handler = &SetupPortal::handle_ams_display_post;
-  ams_display_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &ams_display_uri), kTag,
-                      "ams display handler failed");
-
-  httpd_uri_t timezone_uri = {};
-  timezone_uri.uri = "/api/timezone";
-  timezone_uri.method = HTTP_POST;
-  timezone_uri.handler = &SetupPortal::handle_timezone_post;
-  timezone_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &timezone_uri), kTag,
-                      "timezone handler failed");
-
-  httpd_uri_t audio_uri = {};
-  audio_uri.uri = "/api/audio";
-  audio_uri.method = HTTP_POST;
-  audio_uri.handler = &SetupPortal::handle_audio_post;
-  audio_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &audio_uri), kTag,
-                      "audio handler failed");
-
-  httpd_uri_t audio_event_uri = {};
-  audio_event_uri.uri = "/api/audio/event";
-  audio_event_uri.method = HTTP_POST;
-  audio_event_uri.handler = &SetupPortal::handle_audio_event_post;
-  audio_event_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &audio_event_uri), kTag,
-                      "audio event handler failed");
-
-  httpd_uri_t audio_upload_uri = {};
-  audio_upload_uri.uri = "/api/audio/upload";
-  audio_upload_uri.method = HTTP_POST;
-  audio_upload_uri.handler = &SetupPortal::handle_audio_upload;
-  audio_upload_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &audio_upload_uri), kTag,
-                      "audio upload handler failed");
-
-  httpd_uri_t audio_clear_uri = {};
-  audio_clear_uri.uri = "/api/audio/clear";
-  audio_clear_uri.method = HTTP_POST;
-  audio_clear_uri.handler = &SetupPortal::handle_audio_clear;
-  audio_clear_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &audio_clear_uri), kTag,
-                      "audio clear handler failed");
-
-  httpd_uri_t cloud_connect_uri = {};
-  cloud_connect_uri.uri = "/api/cloud/connect";
-  cloud_connect_uri.method = HTTP_POST;
-  cloud_connect_uri.handler = &SetupPortal::handle_cloud_connect;
-  cloud_connect_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &cloud_connect_uri), kTag,
-                      "cloud connect handler failed");
-
-  httpd_uri_t cloud_verify_uri = {};
-  cloud_verify_uri.uri = "/api/cloud/verify";
-  cloud_verify_uri.method = HTTP_POST;
-  cloud_verify_uri.handler = &SetupPortal::handle_cloud_verify;
-  cloud_verify_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &cloud_verify_uri), kTag,
-                      "cloud verify handler failed");
-
-  httpd_uri_t local_connect_uri = {};
-  local_connect_uri.uri = "/api/local/connect";
-  local_connect_uri.method = HTTP_POST;
-  local_connect_uri.handler = &SetupPortal::handle_local_connect;
-  local_connect_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &local_connect_uri), kTag,
-                      "local connect handler failed");
-
-  httpd_uri_t printers_get_uri = {};
-  printers_get_uri.uri = "/api/printers";
-  printers_get_uri.method = HTTP_GET;
-  printers_get_uri.handler = &SetupPortal::handle_printers_get;
-  printers_get_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &printers_get_uri), kTag,
-                      "printers get handler failed");
-
-  httpd_uri_t printers_select_uri = {};
-  printers_select_uri.uri = "/api/printers/select";
-  printers_select_uri.method = HTTP_POST;
-  printers_select_uri.handler = &SetupPortal::handle_printers_select;
-  printers_select_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &printers_select_uri), kTag,
-                      "printers select handler failed");
-
-  httpd_uri_t printers_save_uri = {};
-  printers_save_uri.uri = "/api/printers/save";
-  printers_save_uri.method = HTTP_POST;
-  printers_save_uri.handler = &SetupPortal::handle_printers_save;
-  printers_save_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &printers_save_uri), kTag,
-                      "printers save handler failed");
-
-  httpd_uri_t printers_delete_uri = {};
-  printers_delete_uri.uri = "/api/printers/delete";
-  printers_delete_uri.method = HTTP_POST;
-  printers_delete_uri.handler = &SetupPortal::handle_printers_delete;
-  printers_delete_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &printers_delete_uri), kTag,
-                      "printers delete handler failed");
-
-  httpd_uri_t printers_clear_local_uri = {};
-  printers_clear_local_uri.uri = "/api/printers/clear-local";
-  printers_clear_local_uri.method = HTTP_POST;
-  printers_clear_local_uri.handler = &SetupPortal::handle_printers_clear_local;
-  printers_clear_local_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &printers_clear_local_uri), kTag,
-                      "printers clear-local handler failed");
-
-  httpd_uri_t session_extend_uri = {};
-  session_extend_uri.uri = "/api/session/extend";
-  session_extend_uri.method = HTTP_POST;
-  session_extend_uri.handler = &SetupPortal::handle_session_extend;
-  session_extend_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &session_extend_uri), kTag,
-                      "session extend handler failed");
-
-  httpd_uri_t ota_upload_uri = {};
-  ota_upload_uri.uri = "/api/ota/upload";
-  ota_upload_uri.method = HTTP_POST;
-  ota_upload_uri.handler = &SetupPortal::handle_ota_upload;
-  ota_upload_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &ota_upload_uri), kTag,
-                      "ota upload handler failed");
-
-  httpd_uri_t ota_url_uri = {};
-  ota_url_uri.uri = "/api/ota/url";
-  ota_url_uri.method = HTTP_POST;
-  ota_url_uri.handler = &SetupPortal::handle_ota_url;
-  ota_url_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &ota_url_uri), kTag,
-                      "ota url handler failed");
-
-  httpd_uri_t ota_status_uri = {};
-  ota_status_uri.uri = "/api/ota/status";
-  ota_status_uri.method = HTTP_GET;
-  ota_status_uri.handler = &SetupPortal::handle_ota_status;
-  ota_status_uri.user_ctx = this;
-  ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &ota_status_uri), kTag,
-                      "ota status handler failed");
+  for (const RouteEntry& route : kRoutes) {
+    httpd_uri_t uri = {};
+    uri.uri = route.uri;
+    uri.method = route.method;
+    uri.handler = route.handler;
+    uri.user_ctx = this;
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &uri), kTag,
+                        "route '%s' handler failed", route.uri);
+  }
 
 #ifdef PRINTSPHERE_DEBUG_BUILD
   httpd_uri_t debug_log_uri = {};
