@@ -203,7 +203,7 @@ void worker_task(void*) {
         continue;
       }
       // Per-event gate: skip silently if this event has been disabled.
-      if (g_event_enabled_ptr != nullptr && event_idx < AudioNotifier::kEventCount &&
+      if (g_event_enabled_ptr != nullptr && event_idx < AudioNotifier::kMaxEvents &&
           !g_event_enabled_ptr[event_idx].load(std::memory_order_relaxed)) {
         continue;
       }
@@ -216,7 +216,7 @@ void worker_task(void*) {
     // codec session so we don't hold the mutex while doing I2S DMA writes).
     std::vector<int16_t> custom_pcm;
     if (g_pcm_mutex_ptr != nullptr && g_custom_pcm_ptr != nullptr &&
-        event_idx < AudioNotifier::kEventCount) {
+        event_idx < AudioNotifier::kMaxEvents) {
       std::lock_guard<std::mutex> lock(*g_pcm_mutex_ptr);
       custom_pcm = g_custom_pcm_ptr[event_idx];  // copy (usually empty)
     }
@@ -303,11 +303,16 @@ void worker_task(void*) {
 }  // namespace
 
 AudioNotifier::AudioNotifier() {
-  // Defaults: core print/HMS alerts and Click feedback = on; less common
-  // optional notifications default off.
-  for (uint8_t i = 0; i < kEventCount; ++i) {
-    event_enabled_[i].store(i < 5U || i == static_cast<uint8_t>(Event::kClick),
-                            std::memory_order_relaxed);
+  // Every slot must be explicitly initialized before first use — a bare
+  // atomic<bool> array has indeterminate values pre-C++20. Built-ins get
+  // their real defaults; slots beyond kEventCount default to disabled until
+  // register_event() claims and re-initializes one.
+  for (uint8_t i = 0; i < kMaxEvents; ++i) {
+    // Defaults: core print/HMS alerts and Click feedback = on; less common
+    // optional notifications (and all not-yet-registered dynamic slots)
+    // default off.
+    const bool builtin_default = i < 5U || i == static_cast<uint8_t>(Event::kClick);
+    event_enabled_[i].store(i < kEventCount && builtin_default, std::memory_order_relaxed);
   }
 }
 
@@ -351,7 +356,9 @@ esp_err_t AudioNotifier::initialize() {
   return ESP_OK;
 }
 
-void AudioNotifier::play(Event event) {
+void AudioNotifier::play(Event event) { play(static_cast<uint8_t>(event)); }
+
+void AudioNotifier::play(uint8_t event_id) {
   if (!initialized_.load(std::memory_order_relaxed)) {
     return;
   }
@@ -362,7 +369,7 @@ void AudioNotifier::play(Event event) {
     return;
   }
   // Non-blocking — drop the event if the worker is still rendering.
-  const uint8_t item = static_cast<uint8_t>(event);  // no force bit
+  const uint8_t item = event_id;  // no force bit
   xQueueSend(g_queue, &item, 0);
 }
 
@@ -384,53 +391,80 @@ void AudioNotifier::set_volume_percent(int volume) {
   volume_pct_.store(std::clamp(volume, 0, 100), std::memory_order_relaxed);
 }
 
-void AudioNotifier::play_test_event(Event event) {
+void AudioNotifier::play_test_event(Event event) { play_test_event(static_cast<uint8_t>(event)); }
+
+void AudioNotifier::play_test_event(uint8_t event_id) {
   // Force bit bypasses all gates — no save/restore race condition.
   if (!initialized_.load(std::memory_order_relaxed) || g_queue == nullptr) {
     return;
   }
-  const uint8_t item = static_cast<uint8_t>(event) | kQueueForceBit;
+  const uint8_t item = event_id | kQueueForceBit;
   xQueueSend(g_queue, &item, 0);
 }
 
 void AudioNotifier::set_event_enabled(Event event, bool enabled) {
-  const uint8_t idx = static_cast<uint8_t>(event);
-  if (idx < kEventCount) {
-    event_enabled_[idx].store(enabled, std::memory_order_relaxed);
-  }
+  set_event_enabled(static_cast<uint8_t>(event), enabled);
 }
 
 bool AudioNotifier::event_enabled(Event event) const {
-  const uint8_t idx = static_cast<uint8_t>(event);
-  if (idx < kEventCount) {
-    return event_enabled_[idx].load(std::memory_order_relaxed);
+  return event_enabled(static_cast<uint8_t>(event));
+}
+
+void AudioNotifier::set_event_enabled(uint8_t event_id, bool enabled) {
+  if (event_id < kMaxEvents) {
+    event_enabled_[event_id].store(enabled, std::memory_order_relaxed);
+  }
+}
+
+bool AudioNotifier::event_enabled(uint8_t event_id) const {
+  if (event_id < kMaxEvents) {
+    return event_enabled_[event_id].load(std::memory_order_relaxed);
   }
   return false;
 }
 
 void AudioNotifier::set_event_pcm(Event event, std::vector<int16_t> samples) {
-  const uint8_t idx = static_cast<uint8_t>(event);
-  if (idx < kEventCount) {
-    std::lock_guard<std::mutex> lock(pcm_mutex_);
-    custom_pcm_[idx] = std::move(samples);
-  }
+  set_event_pcm(static_cast<uint8_t>(event), std::move(samples));
 }
 
-void AudioNotifier::clear_event_pcm(Event event) {
-  const uint8_t idx = static_cast<uint8_t>(event);
-  if (idx < kEventCount) {
-    std::lock_guard<std::mutex> lock(pcm_mutex_);
-    custom_pcm_[idx].clear();
-  }
-}
+void AudioNotifier::clear_event_pcm(Event event) { clear_event_pcm(static_cast<uint8_t>(event)); }
 
 bool AudioNotifier::has_event_pcm(Event event) const {
-  const uint8_t idx = static_cast<uint8_t>(event);
-  if (idx < kEventCount) {
+  return has_event_pcm(static_cast<uint8_t>(event));
+}
+
+void AudioNotifier::set_event_pcm(uint8_t event_id, std::vector<int16_t> samples) {
+  if (event_id < kMaxEvents) {
+    std::lock_guard<std::mutex> lock(pcm_mutex_);
+    custom_pcm_[event_id] = std::move(samples);
+  }
+}
+
+void AudioNotifier::clear_event_pcm(uint8_t event_id) {
+  if (event_id < kMaxEvents) {
+    std::lock_guard<std::mutex> lock(pcm_mutex_);
+    custom_pcm_[event_id].clear();
+  }
+}
+
+bool AudioNotifier::has_event_pcm(uint8_t event_id) const {
+  if (event_id < kMaxEvents) {
     std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(pcm_mutex_));
-    return !custom_pcm_[idx].empty();
+    return !custom_pcm_[event_id].empty();
   }
   return false;
+}
+
+uint8_t AudioNotifier::register_event(const char* stable_key, bool default_enabled) {
+  const uint8_t slot = next_dynamic_slot_.fetch_add(1, std::memory_order_relaxed);
+  if (slot >= kMaxEvents) {
+    ESP_LOGW(kTag, "register_event(%s) failed: capacity (%u) exhausted",
+             stable_key ? stable_key : "?", static_cast<unsigned>(kMaxEvents));
+    return 0xFF;
+  }
+  event_keys_[slot] = stable_key;
+  event_enabled_[slot].store(default_enabled, std::memory_order_relaxed);
+  return slot;
 }
 
 }  // namespace printsphere
