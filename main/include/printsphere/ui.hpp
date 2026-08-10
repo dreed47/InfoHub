@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -98,6 +99,19 @@ class Ui {
   void request_wake_display();
 
  private:
+  // Phase 6 (plugin-architecture extraction, see CLAUDE.md): page_enabled()/
+  // page_object() below are table-driven instead of a hardcoded if-chain over
+  // kPageIdx* constants. register_page_slots() builds the table once every
+  // page object exists. This is a stepping stone toward the sketch's public
+  // register_pages(plugin_id, count) API (Phase 8) — for now it still encodes
+  // exactly the same single printer page set, same order, same behavior.
+  struct PageSlot {
+    lv_obj_t* const* object = nullptr;        // address of the Ui member holding the object
+    const bool* enabled_flag = nullptr;       // nullptr means "always enabled"
+  };
+  void register_page_slots();
+  std::array<PageSlot, kPageIdxLast + 1> page_slots_{};
+
   esp_err_t build_dashboard();
   void apply_ring_visual_locked(const PrinterSnapshot& snapshot);
   void apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,

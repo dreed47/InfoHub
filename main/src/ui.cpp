@@ -3266,6 +3266,8 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_add_flag(page3_subnote_, LV_OBJ_FLAG_HIDDEN);
   enable_touch_bubble(page3_subnote_);
 
+  register_page_slots();
+
   lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
   lv_obj_update_layout(pager_);
   lv_obj_scroll_to_view(page1_, LV_ANIM_OFF);
@@ -3417,48 +3419,31 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
   // Ring timer resume is handled by apply_ring_visual_locked via apply_snapshot.
 }
 
+void Ui::register_page_slots() {
+  page_slots_[kPageIdxPrinterSelect] = {&page0_, nullptr};
+  for (int u = 0; u < kMaxAmsUnits; ++u) {
+    page_slots_[kPageIdxAmsFirst + u] = {&ams_pages_[u], &ams_unit_present_[u]};
+  }
+  page_slots_[kPageIdxMain] = {&page1_, nullptr};
+  page_slots_[kPageIdxPreview] = {&page2_, &preview_page_available_};
+  page_slots_[kPageIdxCamera] = {&page3_, &camera_page_available_};
+  page_slots_[kPageIdxCredits] = {&page4_, nullptr};
+}
+
 bool Ui::page_enabled(int page) const {
-  if (page == kPageIdxPrinterSelect) {
-    return true;
+  if (page < 0 || page >= static_cast<int>(page_slots_.size())) {
+    return false;
   }
-  if (page >= kPageIdxAmsFirst && page <= kPageIdxAmsLast) {
-    return ams_unit_present_[page - kPageIdxAmsFirst];
-  }
-  if (page == kPageIdxMain) {
-    return true;
-  }
-  if (page == kPageIdxPreview) {
-    return preview_page_available_;
-  }
-  if (page == kPageIdxCamera) {
-    return camera_page_available_;
-  }
-  if (page == kPageIdxCredits) {
-    return true;
-  }
-  return false;
+  const PageSlot& slot = page_slots_[page];
+  return slot.enabled_flag == nullptr || *slot.enabled_flag;
 }
 
 lv_obj_t* Ui::page_object(int page) const {
-  if (page == kPageIdxPrinterSelect) {
-    return page0_;
+  if (page < 0 || page >= static_cast<int>(page_slots_.size())) {
+    return nullptr;
   }
-  if (page >= kPageIdxAmsFirst && page <= kPageIdxAmsLast) {
-    return ams_pages_[page - kPageIdxAmsFirst];
-  }
-  if (page == kPageIdxMain) {
-    return page1_;
-  }
-  if (page == kPageIdxPreview) {
-    return page2_;
-  }
-  if (page == kPageIdxCamera) {
-    return page3_;
-  }
-  if (page == kPageIdxCredits) {
-    return page4_;
-  }
-  return nullptr;
+  const PageSlot& slot = page_slots_[page];
+  return slot.object != nullptr ? *slot.object : nullptr;
 }
 
 int Ui::next_enabled_page(int page, int direction) const {
