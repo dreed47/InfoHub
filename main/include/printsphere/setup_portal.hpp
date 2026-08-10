@@ -57,6 +57,7 @@ class SetupPortal {
   static esp_err_t handle_wifi_scan(httpd_req_t* request);
   static esp_err_t handle_config_get(httpd_req_t* request);
   static esp_err_t handle_config_post(httpd_req_t* request);
+  static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
   static esp_err_t handle_arc_preview(httpd_req_t* request);
   static esp_err_t handle_arc_commit(httpd_req_t* request);
   static esp_err_t handle_arc_update(httpd_req_t* request, bool persist);

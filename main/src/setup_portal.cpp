@@ -1036,7 +1036,7 @@ esp_err_t SetupPortal::start() {
   config.server_port = 80;
   config.stack_size = 12288;  // 8192 was too small — handle_root builds ~40KB HTML on the stack
   // Leave some headroom for portal endpoints so feature additions do not silently exhaust slots.
-  config.max_uri_handlers = 32;
+  config.max_uri_handlers = 40;
   config.recv_wait_timeout = 30;
 
   ESP_RETURN_ON_ERROR(httpd_start(&server_, &config), kTag, "httpd_start failed");
@@ -1059,6 +1059,7 @@ esp_err_t SetupPortal::start() {
       {"/api/wifi/scan", HTTP_GET, &SetupPortal::handle_wifi_scan},
       {"/api/config", HTTP_GET, &SetupPortal::handle_config_get},
       {"/api/config", HTTP_POST, &SetupPortal::handle_config_post},
+      {"/api/plugins/printer/config", HTTP_GET, &SetupPortal::handle_plugin_printer_config_get},
       {"/api/arc/preview", HTTP_POST, &SetupPortal::handle_arc_preview},
       {"/api/arc/commit", HTTP_POST, &SetupPortal::handle_arc_commit},
       {"/api/source-mode", HTTP_POST, &SetupPortal::handle_source_mode_post},
@@ -3228,37 +3229,13 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   }
 
   const WifiCredentials wifi = portal->config_store_.load_wifi_credentials();
-  const BambuCloudCredentials cloud = portal->config_store_.load_cloud_credentials();
-  const SourceMode source_mode = portal->config_store_.load_source_mode();
   const DisplayRotation display_rotation = portal->config_store_.load_display_rotation();
   const bool portal_lock_enabled = portal->config_store_.load_portal_lock_enabled();
-  const PrinterConnection printer = portal->config_store_.load_active_printer_profile().to_connection();
   const ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
   const BatteryDisplayPolicy bat_policy_get = portal->config_store_.load_battery_display_policy();
-  const BambuCloudSnapshot cloud_snapshot = portal->cloud_client_.snapshot();
-  const std::string effective_printer_serial = [&]() -> std::string {
-    if (!printer.serial.empty()) return printer.serial;
-    const auto cloud_devs = portal->cloud_client_.get_cloud_devices();
-    const auto profiles = portal->config_store_.load_printer_profiles();
-    for (const auto& cd : cloud_devs) {
-      bool has_local = false;
-      for (const auto& p : profiles) {
-        if (p.serial == cd.serial && p.has_local_config()) { has_local = true; break; }
-      }
-      if (!has_local) return cd.serial;
-    }
-    return cloud_snapshot.resolved_serial;
-  }();
 
   std::string body = "{";
   body += "\"wifi_ssid\":\"" + json_escape(wifi.ssid) + "\",";
-  body += "\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
-  body += "\"cloud_region\":\"" + json_escape(to_string(cloud.region)) + "\",";
-  body += "\"printer_host\":\"" + json_escape(printer.host) + "\",";
-  body += "\"printer_serial\":\"" + json_escape(effective_printer_serial) + "\",";
-  body += "\"source_mode\":\"";
-  body += to_string(source_mode);
-  body += "\",";
   body += "\"display_rotation\":\"";
   body += to_string(display_rotation);
   body += "\",";
@@ -3268,18 +3245,10 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   body += "\"portal_lock_enabled\":";
   body += portal_lock_enabled ? "true" : "false";
   body += ",";
-  body += "\"state_source\":\"";
-  body += to_string(source_mode);
-  body += "\",";
   body += "\"wifi_connected\":";
   body += (portal->wifi_manager_.is_station_connected() ? "true" : "false");
   body += ",";
   body += "\"wifi_ip\":\"" + json_escape(portal->wifi_manager_.station_ip()) + "\"";
-  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
-  append_cloud_status_fields(&body, cloud_snapshot);
-  append_local_status_fields(&body, local_snapshot, portal->printer_client_.is_configured());
-  append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
-                               portal->cloud_client_.mqtt_telemetry());
   body += ",\"arc_printing\":\"" + color_to_html_hex(arc_colors.printing) + "\"";
   body += ",\"arc_done\":\"" + color_to_html_hex(arc_colors.done) + "\"";
   body += ",\"arc_error\":\"" + color_to_html_hex(arc_colors.error) + "\"";
@@ -3314,6 +3283,62 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   return ESP_OK;
 }
 
+// Phase 7 (plugin-architecture extraction, see CLAUDE.md): printer/cloud
+// config + status, split out of the /api/config god-endpoint. This is
+// read-only — writes already go through their own fully independent,
+// self-contained endpoints (/api/cloud/connect, /api/local/connect,
+// /api/source-mode, /api/printers/*), each with its own validation and
+// its own live-reconnect (no shared/cross-plugin state, no reboot needed
+// since these clients support live reconfigure). No POST needed here.
+esp_err_t SetupPortal::handle_plugin_printer_config_get(httpd_req_t* request) {
+  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
+  if (portal == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!portal->is_request_authorized(request)) {
+    return portal->send_locked_response(request);
+  }
+
+  const BambuCloudCredentials cloud = portal->config_store_.load_cloud_credentials();
+  const SourceMode source_mode = portal->config_store_.load_source_mode();
+  const PrinterConnection printer = portal->config_store_.load_active_printer_profile().to_connection();
+  const BambuCloudSnapshot cloud_snapshot = portal->cloud_client_.snapshot();
+  const std::string effective_printer_serial = [&]() -> std::string {
+    if (!printer.serial.empty()) return printer.serial;
+    const auto cloud_devs = portal->cloud_client_.get_cloud_devices();
+    const auto profiles = portal->config_store_.load_printer_profiles();
+    for (const auto& cd : cloud_devs) {
+      bool has_local = false;
+      for (const auto& p : profiles) {
+        if (p.serial == cd.serial && p.has_local_config()) { has_local = true; break; }
+      }
+      if (!has_local) return cd.serial;
+    }
+    return cloud_snapshot.resolved_serial;
+  }();
+
+  std::string body = "{";
+  body += "\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
+  body += "\"cloud_region\":\"" + json_escape(to_string(cloud.region)) + "\",";
+  body += "\"printer_host\":\"" + json_escape(printer.host) + "\",";
+  body += "\"printer_serial\":\"" + json_escape(effective_printer_serial) + "\",";
+  body += "\"source_mode\":\"";
+  body += to_string(source_mode);
+  body += "\",";
+  body += "\"state_source\":\"";
+  body += to_string(source_mode);
+  body += "\"";
+  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
+  append_cloud_status_fields(&body, cloud_snapshot);
+  append_local_status_fields(&body, local_snapshot, portal->printer_client_.is_configured());
+  append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
+                               portal->cloud_client_.mqtt_telemetry());
+  body += "}";
+
+  send_json(request, body);
+  return ESP_OK;
+}
+
 esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
   auto* portal = static_cast<SetupPortal*>(request->user_ctx);
   if (portal == nullptr) {
@@ -3330,9 +3355,6 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
   }
 
   const WifiCredentials stored_wifi = portal->config_store_.load_wifi_credentials();
-  const BambuCloudCredentials stored_cloud = portal->config_store_.load_cloud_credentials();
-  const PrinterConnection stored_printer = portal->config_store_.load_active_printer_profile().to_connection();
-  const std::string stored_cloud_access_token = portal->config_store_.load_cloud_access_token();
   const bool stored_portal_lock_enabled = portal->config_store_.load_portal_lock_enabled();
 
   const WifiCredentials wifi = merge_wifi_credentials({
@@ -3340,12 +3362,6 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
       .password = read_string_field(root, "wifi_password"),
   }, stored_wifi);
 
-  const BambuCloudCredentials cloud = merge_cloud_credentials({
-      .email = trim_copy(read_string_field(root, "cloud_email")),
-      .password = read_string_field(root, "cloud_password"),
-      .region = parse_cloud_region(trim_copy(read_string_field(root, "cloud_region"))),
-  }, stored_cloud);
-  const SourceMode source_mode = parse_source_mode_field(root);
   const DisplayRotation display_rotation = parse_display_rotation_field(root);
   const int display_tilt_deci_deg = parse_display_tilt_deci_deg_field(root);
   const bool portal_lock_enabled =
@@ -3354,12 +3370,6 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
       read_bool_field(root, "filament_wake", portal->config_store_.load_filament_wake_enabled());
   const bool filament_anim =
       read_bool_field(root, "filament_anim", portal->config_store_.load_filament_anim_enabled());
-
-  const PrinterConnection printer = merge_printer_connection({
-      .host = trim_copy(read_string_field(root, "printer_host")),
-      .serial = trim_copy(read_string_field(root, "printer_serial")),
-      .access_code = trim_copy(read_string_field(root, "printer_access_code")),
-  }, stored_printer);
 
   ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
   const bool colors_valid = parse_arc_colors_from_json(root, &arc_colors);
@@ -3399,41 +3409,16 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "invalid arc color value");
   }
 
-  const bool local_requires_complete_fields =
-      !printer.host.empty() || !printer.access_code.empty();
-  const bool cloud_any = !cloud.email.empty() || !cloud.password.empty();
-  const bool local_ready = printer.is_ready();
-  const bool cloud_ready =
-      cloud.is_configured() || can_reuse_cloud_session(cloud, stored_cloud, stored_cloud_access_token);
+  // Phase 7: cloud/printer connection fields moved to their own endpoints
+  // (/api/cloud/connect, /api/local/connect, /api/source-mode) — each
+  // validates and persists its own domain independently, live-reconnecting
+  // without a reboot. This handler no longer cross-checks wifi readiness
+  // against printer/cloud readiness; it only owns core device settings.
 
-  if (!local_ready && local_requires_complete_fields) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "local printer fields incomplete");
-  }
-  if (!cloud_ready && cloud_any) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "cloud account fields incomplete");
-  }
-  if (!wifi.is_configured() && !local_ready && !cloud_ready) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST,
-                               "configure Wi-Fi, cloud or local printer access");
-  }
-  if (!printer.host.empty() && !is_valid_printer_host(printer.host)) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST,
-                               "printer host must be full IPv4 or hostname");
-  }
-
-  ESP_LOGI(kTag,
-           "Saving config: wifi_ssid=%s cloud_email_len=%u source_mode=%s portal_lock=%s local_host=%s serial_len=%u access_len=%u",
-           wifi.ssid.c_str(), static_cast<unsigned int>(cloud.email.size()),
-           to_string(source_mode), portal_lock_enabled ? "enabled" : "disabled",
-           printer.host.c_str(),
-           static_cast<unsigned int>(printer.serial.size()),
-           static_cast<unsigned int>(printer.access_code.size()));
+  ESP_LOGI(kTag, "Saving core config: wifi_ssid=%s portal_lock=%s", wifi.ssid.c_str(),
+           portal_lock_enabled ? "enabled" : "disabled");
 
   ESP_RETURN_ON_ERROR(portal->config_store_.save_wifi_credentials(wifi), kTag, "save wifi failed");
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_cloud_credentials(cloud), kTag,
-                      "save cloud failed");
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_source_mode(source_mode), kTag,
-                      "save source mode failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_rotation(display_rotation), kTag,
                       "save display rotation failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_tilt_deci_deg(display_tilt_deci_deg), kTag,
@@ -3444,16 +3429,6 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
                       "save filament wake failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_filament_anim_enabled(filament_anim), kTag,
                       "save filament anim failed");
-  // Update active printer profile with form values
-  {
-    PrinterProfile profile = portal->config_store_.load_active_printer_profile();
-    if (!printer.serial.empty()) {
-      profile.serial = printer.serial;
-      profile.host = printer.host;
-      profile.access_code = printer.access_code;
-      portal->config_store_.save_printer_profile(profile);
-    }
-  }
   ESP_RETURN_ON_ERROR(portal->config_store_.save_arc_color_scheme(arc_colors), kTag,
                       "save arc colors failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_battery_display_policy(bat_policy_post), kTag,
