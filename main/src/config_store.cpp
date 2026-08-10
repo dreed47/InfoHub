@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -440,8 +441,17 @@ esp_err_t ConfigStore::save_battery_display_policy(const BatteryDisplayPolicy& p
 }
 
 esp_err_t ConfigStore::save_string(const char* key, const std::string& value) const {
+  return save_string_ns(kNamespace, key, value);
+}
+
+std::string ConfigStore::load_string(const char* key) const {
+  return load_string_ns(kNamespace, key);
+}
+
+esp_err_t ConfigStore::save_string_ns(const char* ns, const char* key,
+                                       const std::string& value) const {
   nvs_handle_t handle = 0;
-  ESP_RETURN_ON_ERROR(nvs_open(kNamespace, NVS_READWRITE, &handle), kTag, "nvs_open failed");
+  ESP_RETURN_ON_ERROR(nvs_open(ns, NVS_READWRITE, &handle), kTag, "nvs_open failed");
 
   const esp_err_t set_err = nvs_set_str(handle, key, value.c_str());
   if (set_err != ESP_OK) {
@@ -454,9 +464,9 @@ esp_err_t ConfigStore::save_string(const char* key, const std::string& value) co
   return commit_err;
 }
 
-std::string ConfigStore::load_string(const char* key) const {
+std::string ConfigStore::load_string_ns(const char* ns, const char* key) const {
   nvs_handle_t handle = 0;
-  if (nvs_open(kNamespace, NVS_READONLY, &handle) != ESP_OK) {
+  if (nvs_open(ns, NVS_READONLY, &handle) != ESP_OK) {
     return {};
   }
 
@@ -711,6 +721,70 @@ esp_err_t ConfigStore::save_audio_event_filename(uint8_t event_index,
   char key[16] = {};
   event_filename_key(event_index, key, sizeof(key));
   return save_string(key, name);
+}
+
+// ---------------------------------------------------------------------------
+// Generic per-plugin settings storage
+// ---------------------------------------------------------------------------
+
+namespace {
+// ESP-IDF NVS caps namespace strings at 15 usable chars (16-byte buffer
+// including the null terminator).
+constexpr size_t kMaxNvsNameLen = 15;
+
+bool is_valid_plugin_namespace(const char* plugin_ns) {
+  if (plugin_ns == nullptr || plugin_ns[0] == '\0') return false;
+  return std::strlen(plugin_ns) <= kMaxNvsNameLen;
+}
+
+// "%u_%s" keeps the combined key inside the 15-char NVS key budget for the
+// index range plugins actually need (0..kMaxPrinterProfiles-1 today), mirrors
+// profile_key() above but without the "prn_" prefix since the namespace
+// already scopes the key to one plugin.
+std::string plugin_indexed_key(uint8_t index, const char* suffix) {
+  char key[16] = {};
+  std::snprintf(key, sizeof(key), "%u_%s", static_cast<unsigned>(index), suffix);
+  return key;
+}
+}  // namespace
+
+std::string ConfigStore::load_plugin_string(const char* plugin_ns, const char* key) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return {};
+  return load_string_ns(plugin_ns, key);
+}
+
+esp_err_t ConfigStore::save_plugin_string(const char* plugin_ns, const char* key,
+                                          const std::string& value) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return ESP_ERR_INVALID_ARG;
+  std::lock_guard<std::mutex> lock(plugin_config_mutex_);
+  return save_string_ns(plugin_ns, key, value);
+}
+
+std::string ConfigStore::load_plugin_indexed(const char* plugin_ns, uint8_t index,
+                                             const char* suffix) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return {};
+  return load_string_ns(plugin_ns, plugin_indexed_key(index, suffix).c_str());
+}
+
+esp_err_t ConfigStore::save_plugin_indexed(const char* plugin_ns, uint8_t index,
+                                           const char* suffix, const std::string& value) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return ESP_ERR_INVALID_ARG;
+  std::lock_guard<std::mutex> lock(plugin_config_mutex_);
+  return save_string_ns(plugin_ns, plugin_indexed_key(index, suffix).c_str(), value);
+}
+
+uint8_t ConfigStore::load_plugin_record_count(const char* plugin_ns) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return 0;
+  const std::string count_str = load_string_ns(plugin_ns, "count");
+  if (count_str.empty()) return 0;
+  const long parsed = std::strtol(count_str.c_str(), nullptr, 10);
+  return (parsed >= 0 && parsed <= 255) ? static_cast<uint8_t>(parsed) : 0;
+}
+
+esp_err_t ConfigStore::save_plugin_record_count(const char* plugin_ns, uint8_t count) const {
+  if (!is_valid_plugin_namespace(plugin_ns)) return ESP_ERR_INVALID_ARG;
+  std::lock_guard<std::mutex> lock(plugin_config_mutex_);
+  return save_string_ns(plugin_ns, "count", std::to_string(count));
 }
 
 }  // namespace printsphere

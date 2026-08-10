@@ -1341,15 +1341,18 @@ esp_err_t Ui::initialize() {
   ESP_RETURN_ON_ERROR(build_dashboard(), kTag, "build_dashboard failed");
 
   // With LV_SCROLL_SNAP_NONE the pager decelerates freely after finger release.
-  // scroll_throw=90 shrinks velocity to ~10% per tick, reaching zero in ~3 ticks
-  // (~30 ms). SCROLL_END fires almost immediately and handle_pager_event()
-  // launches a single ease-out snap animation to the nearest page — no
-  // competing LVGL snap animations.
+  // scroll_throw shrinks velocity per tick; higher values kill momentum faster
+  // so SCROLL_END fires sooner and handle_pager_event() launches a single
+  // ease-out snap animation to the nearest page with less risk of a competing
+  // native LVGL snap animation still being in flight. 90 was tuned to
+  // eliminate that race but leaves ~zero fling glide, making a quick flick
+  // read as a short static drag. Trying 30 for more forgiving glide —
+  // watch for double-snap/jank at page landings if this reintroduces it.
   {
     lv_indev_t* indev = lv_indev_get_next(nullptr);
     while (indev != nullptr) {
       if (lv_indev_get_type(indev) == LV_INDEV_TYPE_POINTER) {
-        lv_indev_set_scroll_throw(indev, 90);
+        lv_indev_set_scroll_throw(indev, 30);
         break;
       }
       indev = lv_indev_get_next(indev);
@@ -3640,11 +3643,19 @@ void Ui::handle_pager_event(lv_event_t* event) {
   // origin page but the drag went past the threshold, advance one page in the
   // drag direction instead.
   int snap_page = nearest_enabled_page_for_scroll();
-  if (lv_obj_t* origin_obj = page_object(scroll_origin_page_);
-      origin_obj != nullptr && snap_page == scroll_origin_page_) {
+  if (lv_obj_t* origin_obj = page_object(scroll_origin_page_); origin_obj != nullptr) {
     const int delta = scroll_x - lv_obj_get_x(origin_obj);
-    constexpr int kAdvanceThresholdPx = board::kDisplayWidth / 5;
-    if (std::abs(delta) >= kAdvanceThresholdPx) {
+    if (snap_page == scroll_origin_page_) {
+      constexpr int kAdvanceThresholdPx = board::kDisplayWidth / 5;
+      if (std::abs(delta) >= kAdvanceThresholdPx) {
+        snap_page = next_enabled_page(scroll_origin_page_, delta > 0 ? 1 : -1);
+      }
+    } else {
+      // With real fling momentum (scroll_throw), a fast flick can carry
+      // scroll_x more than one page-width past the origin before SCROLL_END
+      // fires, making the nearest-center rule above jump 2+ pages in a single
+      // gesture. Cap every gesture to at most one page of travel from its
+      // origin, matching normal single-swipe-single-page pager UX.
       snap_page = next_enabled_page(scroll_origin_page_, delta > 0 ? 1 : -1);
     }
   }

@@ -174,15 +174,48 @@ class ConfigStore {
   std::string load_audio_event_filename(uint8_t event_index) const;
   esp_err_t save_audio_event_filename(uint8_t event_index, const std::string& name) const;
 
+  // --- Generic per-plugin settings storage -----------------------------
+  // Scoped accessors for plugin-owned settings, so adding a plugin doesn't
+  // require editing this class. Each plugin gets its own NVS namespace
+  // (`plugin_ns`) rather than a shared key prefix, because ESP-IDF NVS caps
+  // both namespace and key strings at 15 chars — a dotted key scheme like
+  // "plugin.weather.city" would not fit. Core settings above are unaffected
+  // and keep living in the `printsphere` namespace.
+  //
+  // `plugin_ns` must be <= 15 chars (enforced by returning ESP_ERR_INVALID_ARG
+  // / an empty string, not by asserting, since plugin ids are not compile-time
+  // constants from this class's point of view).
+  std::string load_plugin_string(const char* plugin_ns, const char* key) const;
+  esp_err_t save_plugin_string(const char* plugin_ns, const char* key,
+                               const std::string& value) const;
+
+  // Indexed-record helpers, generalized from the prn_%u_%s / prn_count
+  // pattern used by PrinterProfile above. A plugin composes its own record
+  // struct on top of these one field at a time, the same way PrinterProfile
+  // is just flat keys underneath.
+  std::string load_plugin_indexed(const char* plugin_ns, uint8_t index,
+                                  const char* suffix) const;
+  esp_err_t save_plugin_indexed(const char* plugin_ns, uint8_t index, const char* suffix,
+                                const std::string& value) const;
+  uint8_t load_plugin_record_count(const char* plugin_ns) const;
+  esp_err_t save_plugin_record_count(const char* plugin_ns, uint8_t count) const;
+
  private:
   esp_err_t save_string(const char* key, const std::string& value) const;
   std::string load_string(const char* key) const;
+  esp_err_t save_string_ns(const char* ns, const char* key, const std::string& value) const;
+  std::string load_string_ns(const char* ns, const char* key) const;
   void migrate_legacy_printer_profile();
 
   // Serializes printer-profile read-modify-write operations so concurrent
   // callers (HTTP handlers on httpd task + main loop) cannot race and clobber
   // `prn_count` / profile slot assignments (see /api/printers/save upsert).
   mutable std::mutex printer_profile_mutex_{};
+
+  // Serializes plugin-config read-modify-write operations, same role as
+  // printer_profile_mutex_ above but shared across all plugins instead of
+  // one mutex per plugin.
+  mutable std::mutex plugin_config_mutex_{};
 };
 
 }  // namespace printsphere
