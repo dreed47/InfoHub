@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -462,6 +463,23 @@ DisplayRotation parse_display_rotation_field(const cJSON* root) {
   return parse_display_rotation(value);
 }
 
+// Field carries whole degrees with one decimal place (e.g. "3.5"); stored
+// internally as tenths of a degree.
+int parse_display_tilt_deci_deg_field(const cJSON* root) {
+  if (root == nullptr) {
+    return 0;
+  }
+
+  const std::string value = trim_copy(read_string_field(root, "display_tilt"));
+  if (value.empty()) {
+    return 0;
+  }
+  double degrees = std::strtod(value.c_str(), nullptr);
+  if (degrees < -10.0) degrees = -10.0;
+  if (degrees > 10.0) degrees = 10.0;
+  return static_cast<int>(std::lround(degrees * 10.0));
+}
+
 std::string source_mode_badge_value(SourceMode mode) {
   switch (mode) {
     case SourceMode::kCloudOnly:
@@ -476,6 +494,12 @@ std::string source_mode_badge_value(SourceMode mode) {
 
 std::string display_rotation_badge_value(DisplayRotation rotation) {
   return std::string(to_string(rotation)) + " deg";
+}
+
+std::string display_tilt_field_value(int deci_deg) {
+  char buffer[16] = {};
+  std::snprintf(buffer, sizeof(buffer), "%.1f", static_cast<double>(deci_deg) / 10.0);
+  return std::string(buffer);
 }
 
 bool cloud_detail_is_transitional(const std::string& detail) {
@@ -1291,6 +1315,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const BambuCloudCredentials cloud = portal->config_store_.load_cloud_credentials();
   const SourceMode source_mode = portal->config_store_.load_source_mode();
   const DisplayRotation display_rotation = portal->config_store_.load_display_rotation();
+  const int display_tilt_deci_deg = portal->config_store_.load_display_tilt_deci_deg();
   const bool portal_lock_enabled = portal->config_store_.load_portal_lock_enabled();
   const bool filament_wake = portal->config_store_.load_filament_wake_enabled();
   const bool filament_anim = portal->config_store_.load_filament_anim_enabled();
@@ -1790,6 +1815,14 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       html += " selected";
     }
     html += ">270 deg</option></select></div>";
+    html += "<div class=\"field\"><label for=\"display_tilt\">Fine tilt adjustment (deg)</label>"
+            "<input type=\"number\" id=\"display_tilt\" step=\"0.1\" min=\"-10\" max=\"10\" value=\"";
+    html += json_escape(display_tilt_field_value(display_tilt_deci_deg));
+    html += "\"></div>";
+    html += "<p class=\"micro\">Compensates a slightly crooked mount (case, bracket, adhesive) so the "
+            "image sits level once the panel is physically installed. Only applied at 90/270 deg; "
+            "leave at 0.0 if the panel already sits level. Small values only — this is not a "
+            "general-purpose rotation control.</p>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"display-rotation-apply-button\">Apply + Restart</button>";
     html += "<div class=\"micro hidden\" id=\"display-rotation-apply-hint\">The new panel orientation is applied on the next boot so display and touch stay in sync.</div></div>";
     html += "<p class=\"micro\">Current orientation: ";
@@ -2407,6 +2440,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "const wifiSsidManualField=document.getElementById('wifi-ssid-manual-field');";
   html += "const wifiSsidScanField=document.getElementById('wifi-ssid-scan-field');";
   html += "const displayRotationSelect=document.getElementById('display_rotation');";
+  html += "const displayTiltInput=document.getElementById('display_tilt');";
   html += "const displayRotationApplyButton=document.getElementById('display-rotation-apply-button');";
   html += "const displayRotationApplyHint=document.getElementById('display-rotation-apply-hint');";
   html += "const portalLockSelect=document.getElementById('portal_lock_enabled');";
@@ -2472,6 +2506,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += to_string(source_mode);
   html += "\",display_rotation:\"";
   html += to_string(display_rotation);
+  html += "\",display_tilt:\"";
+  html += json_escape(display_tilt_field_value(display_tilt_deci_deg));
   html += "\",portal_lock_enabled:";
   html += portal_lock_enabled ? "true" : "false";
   html += ",printer_host:\"";
@@ -2673,7 +2709,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "function updateDisplayRotationControls(){"
           "if(!displayRotationSelect||!displayRotationApplyButton||!displayRotationApplyHint)return;"
           "const selected=valueOf('display_rotation')||'0';"
-          "const changed=selected!==(savedConfig.display_rotation||'0');"
+          "const tilt=displayTiltInput?(valueOf('display_tilt')||'0.0'):(savedConfig.display_tilt||'0.0');"
+          "const changed=selected!==(savedConfig.display_rotation||'0')||tilt!==(savedConfig.display_tilt||'0.0');"
           "displayRotationApplyButton.classList.toggle('hidden',!changed);"
           "displayRotationApplyHint.classList.toggle('hidden',!changed);"
           "if(!changed){displayRotationApplyButton.disabled=false;}}";
@@ -2741,6 +2778,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "cloud_region:(document.getElementById('cloud_region')?valueOf('cloud_region'):savedConfig.cloud_region||'eu'),"
           "cloud_password:(document.getElementById('cloud_password')?valueOf('cloud_password'):''),"
           "display_rotation:(document.getElementById('display_rotation')?valueOf('display_rotation'):savedConfig.display_rotation)||'0',"
+          "display_tilt:(document.getElementById('display_tilt')?valueOf('display_tilt'):savedConfig.display_tilt)||'0.0',"
           "portal_lock_enabled:(document.getElementById('portal_lock_enabled')?valueOf('portal_lock_enabled')==='true':savedConfig.portal_lock_enabled!==false),"
           "filament_wake:(document.getElementById('filament_wake')?valueOf('filament_wake')==='true':savedConfig.filament_wake===true),"
           "filament_anim:(document.getElementById('filament_anim')?valueOf('filament_anim')==='true':savedConfig.filament_anim!==false),"
@@ -2773,12 +2811,14 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "document.addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target.tagName==='INPUT'&&e.target.type!=='submit'){e.preventDefault();e.target.blur();}});";
   html += "{const pt=document.getElementById('portal-timer');if(pt){pt.addEventListener('click',extendSession);}}";
   html += "if(displayRotationSelect){displayRotationSelect.addEventListener('change',updateDisplayRotationControls);}";
+  html += "if(displayTiltInput){displayTiltInput.addEventListener('input',updateDisplayRotationControls);}";
   html += "if(displayRotationApplyButton){displayRotationApplyButton.addEventListener('click',async()=>{const display_rotation=valueOf('display_rotation')||'0';"
-          "if(display_rotation===(savedConfig.display_rotation||'0')){updateDisplayRotationControls();return;}"
+          "const display_tilt=displayTiltInput?(valueOf('display_tilt')||'0.0'):(savedConfig.display_tilt||'0.0');"
+          "if(display_rotation===(savedConfig.display_rotation||'0')&&display_tilt===(savedConfig.display_tilt||'0.0')){updateDisplayRotationControls();return;}"
           "displayRotationApplyButton.disabled=true;setStatus('Applying screen rotation...','Saving the new panel orientation and restarting the ESP now.',15000);"
-          "try{const response=await fetch('/api/display-rotation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({display_rotation})});"
+          "try{const response=await fetch('/api/display-rotation',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({display_rotation,display_tilt})});"
           "const body=await response.json().catch(()=>({}));"
-          "if(response.ok){savedConfig.display_rotation=display_rotation;updateDisplayRotationControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
+          "if(response.ok){savedConfig.display_rotation=display_rotation;savedConfig.display_tilt=display_tilt;updateDisplayRotationControls();setStatus('Saved. Restarting ESP...','The connection will drop briefly during reboot.',30000);}"
           "else{setStatus(body.error||'Rotation change failed',body.detail||'The new display rotation could not be saved.',8000);displayRotationApplyButton.disabled=false;updateDisplayRotationControls();}}"
           "catch(error){setStatus('Rotation change failed','The request to the ESP could not be completed.',8000);displayRotationApplyButton.disabled=false;updateDisplayRotationControls();}});}";
   html += "if(portalLockSelect){portalLockSelect.addEventListener('change',updatePortalAccessControls);}";
@@ -3415,6 +3455,9 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
   body += "\"display_rotation\":\"";
   body += to_string(display_rotation);
   body += "\",";
+  body += "\"display_tilt\":\"";
+  body += json_escape(display_tilt_field_value(portal->config_store_.load_display_tilt_deci_deg()));
+  body += "\",";
   body += "\"portal_lock_enabled\":";
   body += portal_lock_enabled ? "true" : "false";
   body += ",";
@@ -3497,6 +3540,7 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
   }, stored_cloud);
   const SourceMode source_mode = parse_source_mode_field(root);
   const DisplayRotation display_rotation = parse_display_rotation_field(root);
+  const int display_tilt_deci_deg = parse_display_tilt_deci_deg_field(root);
   const bool portal_lock_enabled =
       read_bool_field(root, "portal_lock_enabled", stored_portal_lock_enabled);
   const bool filament_wake =
@@ -3585,6 +3629,8 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
                       "save source mode failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_rotation(display_rotation), kTag,
                       "save display rotation failed");
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_display_tilt_deci_deg(display_tilt_deci_deg), kTag,
+                      "save display tilt failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_portal_lock_enabled(portal_lock_enabled), kTag,
                       "save portal lock failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_filament_wake_enabled(filament_wake), kTag,
@@ -3712,9 +3758,13 @@ esp_err_t SetupPortal::handle_display_rotation_post(httpd_req_t* request) {
   }
 
   const DisplayRotation rotation = parse_display_rotation_field(root);
+  const int tilt_deci_deg = parse_display_tilt_deci_deg_field(root);
   cJSON_Delete(root);
 
-  ESP_LOGI(kTag, "Saving display rotation only: %s", to_string(rotation));
+  ESP_LOGI(kTag, "Saving display rotation only: %s tilt=%d.%d deg", to_string(rotation),
+           tilt_deci_deg / 10, std::abs(tilt_deci_deg % 10));
+  ESP_RETURN_ON_ERROR(portal->config_store_.save_display_tilt_deci_deg(tilt_deci_deg), kTag,
+                      "save display tilt failed");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_display_rotation(rotation), kTag,
                       "save display rotation failed");
 

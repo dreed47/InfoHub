@@ -476,6 +476,33 @@ void apply_display_rotation_visual_offset(lv_obj_t* obj, DisplayRotation rotatio
   lv_obj_set_style_translate_y(obj, display_rotation_visual_offset_y(rotation), 0);
 }
 
+// base_deci_deg is the user-tunable "mounting tilt" offset, in tenths of a
+// degree, set from the web setup portal's Screen Rotation panel. k270 gets
+// the mirrored sign since it's the same panel viewed from the opposite edge.
+int32_t display_rotation_tilt_correction_decideg(DisplayRotation rotation, int32_t base_deci_deg) {
+  switch (rotation) {
+    case DisplayRotation::k90:
+      return base_deci_deg;
+    case DisplayRotation::k270:
+      return -base_deci_deg;
+    case DisplayRotation::k0:
+    case DisplayRotation::k180:
+    default:
+      return 0;
+  }
+}
+
+void apply_display_rotation_tilt_correction(lv_obj_t* screen, DisplayRotation rotation,
+                                             int32_t base_deci_deg) {
+  if (screen == nullptr) {
+    return;
+  }
+
+  lv_obj_set_style_transform_pivot_x(screen, lv_pct(50), 0);
+  lv_obj_set_style_transform_pivot_y(screen, lv_pct(50), 0);
+  lv_obj_set_style_transform_rotation(screen, display_rotation_tilt_correction_decideg(rotation, base_deci_deg), 0);
+}
+
 void set_label_text_if_changed(lv_obj_t* label, const char* text) {
   if (label == nullptr || text == nullptr) {
     return;
@@ -1237,6 +1264,13 @@ void Ui::set_display_rotation(DisplayRotation rotation) {
     return;
   }
   display_rotation_ = rotation;
+}
+
+void Ui::set_display_tilt_deci_deg(int deci_deg) {
+  if (initialized_) {
+    return;
+  }
+  display_tilt_deci_deg_ = deci_deg;
 }
 
 esp_err_t Ui::initialize() {
@@ -2752,6 +2786,7 @@ esp_err_t Ui::build_dashboard() {
   screen_ = lv_screen_active();
   lv_obj_set_style_bg_color(screen_, lv_color_hex(0x000000), 0);
   lv_obj_set_style_bg_opa(screen_, LV_OPA_COVER, 0);
+  apply_display_rotation_tilt_correction(screen_, display_rotation_, display_tilt_deci_deg_);
 
   const lv_font_t* dosis20 = &dosis_20;
   const lv_font_t* dosis32 = &dosis_32;
@@ -2793,10 +2828,21 @@ esp_err_t Ui::build_dashboard() {
   page1_ = create_page(pager_);
   page2_ = create_page(pager_);
   page3_ = create_page(pager_);
+  page4_ = create_page(pager_);
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
   enable_touch_bubble(page3_);
+  enable_touch_bubble(page4_);
+
+  // --- Page 4: test page ---
+  {
+    lv_obj_t* name_label = lv_label_create(page4_);
+    set_label_text_if_changed(name_label, "David Reed");
+    lv_obj_set_style_text_font(name_label, dosis40, 0);
+    lv_obj_set_style_text_color(name_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(name_label);
+  }
 
   // --- Page 0: printer selection ---
   page0_title_ = lv_label_create(page0_);
@@ -2875,6 +2921,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_color(progress_label_, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(progress_label_, LV_ALIGN_CENTER, 0, -178);
   apply_display_rotation_visual_offset(progress_label_, display_rotation_);
+  apply_display_rotation_tilt_correction(progress_label_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_move_foreground(progress_label_);
 
   battery_icon_label_ = lv_label_create(lv_layer_top());
@@ -2883,6 +2930,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_color(battery_icon_label_, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, -140);
   apply_display_rotation_visual_offset(battery_icon_label_, display_rotation_);
+  apply_display_rotation_tilt_correction(battery_icon_label_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_move_foreground(battery_icon_label_);
 
   battery_pct_label_ = lv_label_create(lv_layer_top());
@@ -2891,6 +2939,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_color(battery_pct_label_, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(battery_pct_label_, LV_ALIGN_CENTER, 20, -140);
   apply_display_rotation_visual_offset(battery_pct_label_, display_rotation_);
+  apply_display_rotation_tilt_correction(battery_pct_label_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_move_foreground(battery_pct_label_);
 
   badge_slot_ = lv_obj_create(page1_);
@@ -3063,6 +3112,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_radius(brightness_overlay_, 16, 0);
   lv_obj_align(brightness_overlay_, LV_ALIGN_CENTER, 0, 0);
   apply_display_rotation_visual_offset(brightness_overlay_, display_rotation_);
+  apply_display_rotation_tilt_correction(brightness_overlay_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_add_flag(brightness_overlay_, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(brightness_overlay_);
 
@@ -3082,6 +3132,7 @@ esp_err_t Ui::build_dashboard() {
                         LV_FLEX_ALIGN_CENTER);
   lv_obj_center(portal_overlay_card_);
   apply_display_rotation_visual_offset(portal_overlay_card_, display_rotation_);
+  apply_display_rotation_tilt_correction(portal_overlay_card_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_clear_flag(portal_overlay_card_, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_clear_flag(portal_overlay_card_, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(portal_overlay_card_, LV_OBJ_FLAG_HIDDEN);
@@ -3379,6 +3430,9 @@ bool Ui::page_enabled(int page) const {
   if (page == kPageIdxCamera) {
     return camera_page_available_;
   }
+  if (page == kPageIdxCredits) {
+    return true;
+  }
   return false;
 }
 
@@ -3397,6 +3451,9 @@ lv_obj_t* Ui::page_object(int page) const {
   }
   if (page == kPageIdxCamera) {
     return page3_;
+  }
+  if (page == kPageIdxCredits) {
+    return page4_;
   }
   return nullptr;
 }

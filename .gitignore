@@ -65,3 +65,4 @@ release/2.8c/ota/archive/*
 .clangd
 *.bak
 *.old
+.cache

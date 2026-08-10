@@ -282,6 +282,7 @@ void Application::run() {
            static_cast<unsigned int>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)));
   ui_.set_arc_color_scheme(config_store_.load_arc_color_scheme());
   ui_.set_display_rotation(config_store_.load_display_rotation());
+  ui_.set_display_tilt_deci_deg(config_store_.load_display_tilt_deci_deg());
   ui_.set_battery_display_policy(config_store_.load_battery_display_policy());
   filament_wake_enabled_ = config_store_.load_filament_wake_enabled();
   filament_anim_enabled_ = config_store_.load_filament_anim_enabled();

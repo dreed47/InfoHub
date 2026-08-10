@@ -122,6 +122,9 @@ class ConfigStore {
   std::string load_cloud_access_token() const;
   SourceMode load_source_mode() const;
   DisplayRotation load_display_rotation() const;
+  // Fine tilt correction for mounting tolerance at 90/270 deg, in tenths of a
+  // degree (e.g. 35 == 3.5 deg). Not applied at 0/180.
+  int load_display_tilt_deci_deg() const;
   bool load_portal_lock_enabled() const;
   bool load_filament_wake_enabled() const;
   bool load_filament_anim_enabled() const;
@@ -139,6 +142,7 @@ class ConfigStore {
   esp_err_t clear_cloud_access_token() const;
   esp_err_t save_source_mode(SourceMode mode) const;
   esp_err_t save_display_rotation(DisplayRotation rotation) const;
+  esp_err_t save_display_tilt_deci_deg(int deci_deg) const;
   esp_err_t save_portal_lock_enabled(bool enabled) const;
   esp_err_t save_filament_wake_enabled(bool enabled) const;
   esp_err_t save_filament_anim_enabled(bool enabled) const;

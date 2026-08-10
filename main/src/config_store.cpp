@@ -233,6 +233,17 @@ DisplayRotation ConfigStore::load_display_rotation() const {
   return parse_display_rotation(load_string("display_rot"));
 }
 
+int ConfigStore::load_display_tilt_deci_deg() const {
+  const std::string s = load_string("display_tilt");
+  if (s.empty()) {
+    return 0;
+  }
+  long parsed = std::strtol(s.c_str(), nullptr, 10);
+  if (parsed < -100) parsed = -100;
+  if (parsed > 100) parsed = 100;
+  return static_cast<int>(parsed);
+}
+
 bool ConfigStore::load_portal_lock_enabled() const {
   return parse_bool_or_default(load_string("portal_lock"), true);
 }
@@ -344,6 +355,12 @@ esp_err_t ConfigStore::save_source_mode(SourceMode mode) const {
 
 esp_err_t ConfigStore::save_display_rotation(DisplayRotation rotation) const {
   return save_string("display_rot", to_string(rotation));
+}
+
+esp_err_t ConfigStore::save_display_tilt_deci_deg(int deci_deg) const {
+  if (deci_deg < -100) deci_deg = -100;
+  if (deci_deg > 100) deci_deg = 100;
+  return save_string("display_tilt", std::to_string(deci_deg));
 }
 
 esp_err_t ConfigStore::save_portal_lock_enabled(bool enabled) const {

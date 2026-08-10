@@ -28,15 +28,18 @@ class Ui {
   //   kPageIdxMain:                 main dashboard
   //   kPageIdxPreview:              print preview
   //   kPageIdxCamera:               camera feed
+  //   kPageIdxCredits:              test page (name card)
   static constexpr int kPageIdxPrinterSelect = 0;
   static constexpr int kPageIdxAmsFirst = 1;
   static constexpr int kPageIdxAmsLast = kPageIdxAmsFirst + kMaxAmsUnits - 1;
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxLast = kPageIdxCamera;
+  static constexpr int kPageIdxCredits = kPageIdxCamera + 1;
+  static constexpr int kPageIdxLast = kPageIdxCredits;
 
   void set_display_rotation(DisplayRotation rotation);
+  void set_display_tilt_deci_deg(int deci_deg);
   esp_err_t initialize();
   void set_arc_color_scheme(const ArcColorScheme& colors);
   void apply_snapshot(const PrinterSnapshot& snapshot);
@@ -214,6 +217,7 @@ class Ui {
   lv_obj_t* page1_ = nullptr;
   lv_obj_t* page2_ = nullptr;
   lv_obj_t* page3_ = nullptr;
+  lv_obj_t* page4_ = nullptr;
   lv_obj_t* status_arc_ = nullptr;
   lv_obj_t* progress_label_ = nullptr;
   lv_obj_t* battery_icon_label_ = nullptr;
@@ -340,6 +344,7 @@ class Ui {
   PrinterSnapshot deferred_snapshot_{};
   PrinterSnapshot last_snapshot_{};
   DisplayRotation display_rotation_ = DisplayRotation::k0;
+  int display_tilt_deci_deg_ = 0;
   BatteryDisplayPolicy battery_display_policy_{};
 };
 
