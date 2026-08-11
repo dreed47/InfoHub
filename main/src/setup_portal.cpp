@@ -1335,7 +1335,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const auto begin_settings_panel =
       [&html, &add_summary_pill](const char* title, const char* detail,
                                  const std::string& badge_value, const char* badge_class,
-                                 bool open) {
+                                 bool open, const char* pill_id = nullptr) {
         html += "<details class=\"settings-panel\"";
         if (open) {
           html += " open";
@@ -1345,7 +1345,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
         html += "</h3><p>";
         html += detail;
         html += "</p></div><div class=\"settings-panel-side\">";
-        add_summary_pill(&html, badge_value, badge_class);
+        add_summary_pill(&html, badge_value, badge_class, pill_id);
         html += "<span class=\"settings-panel-icon\" aria-hidden=\"true\"></span></div></summary><div class=\"settings-panel-body\">";
       };
   const auto end_settings_panel = [&html]() { html += "</div></details>"; };
@@ -1503,11 +1503,18 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "</span></p>";
     end_collapsible_section();
   };
-  const auto render_cloud_section = [&]() {
-    begin_collapsible_section(
-        "Bambu Cloud",
-        "Primary source for cloud monitoring, cover image, project metadata and cloud lifecycle. Use Connect to start the login immediately. If Bambu asks for a verification code or 2FA code, you can complete that step here.",
-        cloud_badge_value, cloud_badge_class, cloud_section_open, "cloud-section-pill");
+  const auto render_cloud_section = [&](bool nested) {
+    if (nested) {
+      begin_settings_panel(
+          "Bambu Cloud",
+          "Primary source for cloud monitoring, cover image, project metadata and cloud lifecycle. Use Connect to start the login immediately. If Bambu asks for a verification code or 2FA code, you can complete that step here.",
+          cloud_badge_value, cloud_badge_class, cloud_section_open, "cloud-section-pill");
+    } else {
+      begin_collapsible_section(
+          "Bambu Cloud",
+          "Primary source for cloud monitoring, cover image, project metadata and cloud lifecycle. Use Connect to start the login immediately. If Bambu asks for a verification code or 2FA code, you can complete that step here.",
+          cloud_badge_value, cloud_badge_class, cloud_section_open, "cloud-section-pill");
+    }
     html += "<div class=\"grid-2\">";
     html += "<div class=\"field\"><label for=\"cloud_email\">Bambu Email / Phone</label><input id=\"cloud_email\" value=\"";
     html += json_escape(cloud.email);
@@ -1552,13 +1559,24 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "\" id=\"cloud-verify-note\">";
     html += json_escape(cloud_code_note);
     html += "</p>";
-    end_collapsible_section();
+    if (nested) {
+      end_settings_panel();
+    } else {
+      end_collapsible_section();
+    }
   };
-  const auto render_local_section = [&]() {
-    begin_collapsible_section(
-        "Local Printer Path",
-        "The local MQTT path provides live status, layers, temperatures and also powers camera snapshots on page 3.",
-        local_badge_value, local_badge_class, local_section_open, "local-section-pill");
+  const auto render_local_section = [&](bool nested) {
+    if (nested) {
+      begin_settings_panel(
+          "Local Printer Path",
+          "The local MQTT path provides live status, layers, temperatures and also powers camera snapshots on page 3.",
+          local_badge_value, local_badge_class, local_section_open, "local-section-pill");
+    } else {
+      begin_collapsible_section(
+          "Local Printer Path",
+          "The local MQTT path provides live status, layers, temperatures and also powers camera snapshots on page 3.",
+          local_badge_value, local_badge_class, local_section_open, "local-section-pill");
+    }
     html += "<div class=\"grid-2\">";
     html += "<div class=\"field\"><label for=\"printer_host\">Printer IP or Hostname</label><input id=\"printer_host\" value=\"";
     html += json_escape(printer.host);
@@ -1576,7 +1594,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"local-connect-button\">Connect Local</button>";
     html += "<div class=\"micro\">This saves the local printer credentials immediately. In Hybrid and Local only it also reconnects MQTT and camera without rebooting.</div></div>";
     html += "<p class=\"micro\">In Hybrid mode PrintSphere auto-picks the better status path for your printer and still uses the local camera when available.</p>";
-    end_collapsible_section();
+    if (nested) {
+      end_settings_panel();
+    } else {
+      end_collapsible_section();
+    }
   };
 
   html += "<form id=\"config-form\" class=\"stack\">";
@@ -1586,10 +1608,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     render_wifi_section();
   }
   if (show_connection_steps && !cloud_section_configured) {
-    render_cloud_section();
+    render_cloud_section(false);
   }
   if (show_connection_steps && local_needs_setup) {
-    render_local_section();
+    render_local_section(false);
   }
 
   if (wifi_configured) {
@@ -1790,6 +1812,89 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "<div class=\"micro hidden\" id=\"bat-display-apply-hint\">Energy settings apply after the ESP restarts.</div></div>";
     end_settings_panel();
 
+    {
+      const std::string saved_tz = portal->config_store_.load_timezone_iana();
+      const std::string tz_badge_value = saved_tz.empty() ? "Auto" : saved_tz;
+      begin_settings_panel(
+          "Time Zone",
+          "Local time used for the on-screen ETA. Auto-detected from your browser when unset.",
+          tz_badge_value, "info", false);
+      html += "<div class=\"field\"><label for=\"tz_iana\">Time Zone (IANA)</label><select id=\"tz_iana\">";
+      html += "<option value=\"\"";
+      if (saved_tz.empty()) {
+        html += " selected";
+      }
+      html += ">Auto (browser)</option>";
+      for (const auto& zone : time_sync::supported_iana_zones()) {
+        html += "<option value=\"";
+        html.append(zone.data(), zone.size());
+        html += "\"";
+        if (saved_tz == zone) {
+          html += " selected";
+        }
+        html += ">";
+        html.append(zone.data(), zone.size());
+        html += "</option>";
+      }
+      html += "</select></div>";
+      html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"tz-apply-button\">Apply</button>";
+      html += "<div class=\"micro\" id=\"tz-detected-hint\"></div></div>";
+      end_settings_panel();
+    }
+
+    begin_settings_panel(
+        "Portal Access",
+        "PIN protection for the web portal on your home network after provisioning.",
+        portal_lock_badge_value, portal_lock_badge_class, portal_access_section_open);
+    html += "<div class=\"field\"><label for=\"portal_lock_enabled\">Portal Lock</label><select id=\"portal_lock_enabled\">";
+    html += "<option value=\"true\"";
+    if (portal_lock_enabled) {
+      html += " selected";
+    }
+    html += ">Enabled: require PIN unlock on the home network</option>";
+    html += "<option value=\"false\"";
+    if (!portal_lock_enabled) {
+      html += " selected";
+    }
+    html += ">Disabled: keep the portal open on the home network</option></select></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"portal-access-apply-button\">Apply + Restart</button>";
+    html += "<div class=\"micro hidden\" id=\"portal-access-apply-hint\">Portal access changes apply after the ESP restarts so the new lock mode is active immediately.</div></div>";
+    html += "<div class=\"hint-box\"><strong>Security:</strong> ";
+    html += setup_ap_active
+                ? "The portal always stays open while the setup access point is active."
+                : (portal_lock_enabled
+                       ? "Long-press on the device display to show a temporary 6-digit unlock PIN whenever you need browser access."
+                       : "With the PIN lock disabled, anyone on the same home network can open Web Config without the device-generated PIN.");
+    html += "</div>";
+    html += "<p class=\"micro\">The lock never applies while PrintSphere is still in setup AP mode.</p>";
+    end_settings_panel();
+    html += "</div>";
+    end_collapsible_section();
+  } // wifi_configured (Device Settings)
+
+  // --- Printer plugin section ---
+  // Everything specific to the printer plugin (AMS display, sound events,
+  // connection mode, printer selection, cloud/local connection) groups under
+  // one collapsible block, mirroring the /api/config vs
+  // /api/plugins/printer/config backend split (see CLAUDE.md's
+  // plugin-isolation principle). Core settings (Wi-Fi, Display, Battery,
+  // Portal Access, Time Zone) stay in Device Settings above / their own
+  // sections — this block is exclusively printer-plugin-owned.
+  if (show_connection_steps) {
+    const std::string printer_group_badge_value =
+        local_snapshot.local_connected
+            ? local_badge_value
+            : (cloud_snapshot.connected ? cloud_badge_value : std::string("Setup"));
+    const char* printer_group_badge_class =
+        local_snapshot.local_connected
+            ? local_badge_class
+            : (cloud_snapshot.connected ? cloud_badge_class : "idle");
+    begin_collapsible_section(
+        "Printer",
+        "Bambu printer connection, AMS display, sound events and connection mode — everything specific to the printer plugin.",
+        printer_group_badge_value, printer_group_badge_class, false);
+    html += "<div class=\"settings-accordion\">";
+
     begin_settings_panel(
         "AMS Display",
         "Wake behaviour and animation policy for automatic filament changes.",
@@ -1917,100 +2022,36 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       end_settings_panel();
     }
 
-    {
-      const std::string saved_tz = portal->config_store_.load_timezone_iana();
-      const std::string tz_badge_value = saved_tz.empty() ? "Auto" : saved_tz;
-      begin_settings_panel(
-          "Time Zone",
-          "Local time used for the on-screen ETA. Auto-detected from your browser when unset.",
-          tz_badge_value, "info", false);
-      html += "<div class=\"field\"><label for=\"tz_iana\">Time Zone (IANA)</label><select id=\"tz_iana\">";
-      html += "<option value=\"\"";
-      if (saved_tz.empty()) {
-        html += " selected";
-      }
-      html += ">Auto (browser)</option>";
-      for (const auto& zone : time_sync::supported_iana_zones()) {
-        html += "<option value=\"";
-        html.append(zone.data(), zone.size());
-        html += "\"";
-        if (saved_tz == zone) {
-          html += " selected";
-        }
-        html += ">";
-        html.append(zone.data(), zone.size());
-        html += "</option>";
-      }
-      html += "</select></div>";
-      html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"tz-apply-button\">Apply</button>";
-      html += "<div class=\"micro\" id=\"tz-detected-hint\"></div></div>";
-      end_settings_panel();
-    }
-
-    if (show_connection_steps) {
-      begin_settings_panel(
-          "Connection Mode",
-          "Choose which runtime path drives the UI. This rewires active clients after restart.",
-          source_badge_value, "info", connection_mode_section_open);
-      html += "<div class=\"field\"><label for=\"source_mode\">Connection Mode</label><select id=\"source_mode\">";
-      html += "<option value=\"hybrid\"";
-      if (source_mode == SourceMode::kHybrid) {
-        html += " selected";
-      }
-      html += ">Hybrid (recommended): auto-pick the best status path for your printer, keep local camera when available</option>";
-      html += "<option value=\"cloud_only\"";
-      if (source_mode == SourceMode::kCloudOnly) {
-        html += " selected";
-      }
-      html += ">Cloud only: cloud monitoring and preview, local MQTT/camera disabled</option>";
-      html += "<option value=\"local_only\"";
-      if (source_mode == SourceMode::kLocalOnly) {
-        html += " selected";
-      }
-      html += ">Local only</option></select></div>";
-      html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"source-mode-apply-button\">Apply + Restart</button>";
-      html += "<div class=\"micro hidden\" id=\"source-mode-apply-hint\">A mode change rewires the active clients, so the ESP restarts right away after saving it.</div></div>";
-      end_settings_panel();
-    }
-
     begin_settings_panel(
-        "Portal Access",
-        "PIN protection for the web portal on your home network after provisioning.",
-        portal_lock_badge_value, portal_lock_badge_class, portal_access_section_open);
-    html += "<div class=\"field\"><label for=\"portal_lock_enabled\">Portal Lock</label><select id=\"portal_lock_enabled\">";
-    html += "<option value=\"true\"";
-    if (portal_lock_enabled) {
+        "Connection Mode",
+        "Choose which runtime path drives the UI. This rewires active clients after restart.",
+        source_badge_value, "info", connection_mode_section_open);
+    html += "<div class=\"field\"><label for=\"source_mode\">Connection Mode</label><select id=\"source_mode\">";
+    html += "<option value=\"hybrid\"";
+    if (source_mode == SourceMode::kHybrid) {
       html += " selected";
     }
-    html += ">Enabled: require PIN unlock on the home network</option>";
-    html += "<option value=\"false\"";
-    if (!portal_lock_enabled) {
+    html += ">Hybrid (recommended): auto-pick the best status path for your printer, keep local camera when available</option>";
+    html += "<option value=\"cloud_only\"";
+    if (source_mode == SourceMode::kCloudOnly) {
       html += " selected";
     }
-    html += ">Disabled: keep the portal open on the home network</option></select></div>";
-    html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"portal-access-apply-button\">Apply + Restart</button>";
-    html += "<div class=\"micro hidden\" id=\"portal-access-apply-hint\">Portal access changes apply after the ESP restarts so the new lock mode is active immediately.</div></div>";
-    html += "<div class=\"hint-box\"><strong>Security:</strong> ";
-    html += setup_ap_active
-                ? "The portal always stays open while the setup access point is active."
-                : (portal_lock_enabled
-                       ? "Long-press on the device display to show a temporary 6-digit unlock PIN whenever you need browser access."
-                       : "With the PIN lock disabled, anyone on the same home network can open Web Config without the device-generated PIN.");
-    html += "</div>";
-    html += "<p class=\"micro\">The lock never applies while PrintSphere is still in setup AP mode.</p>";
+    html += ">Cloud only: cloud monitoring and preview, local MQTT/camera disabled</option>";
+    html += "<option value=\"local_only\"";
+    if (source_mode == SourceMode::kLocalOnly) {
+      html += " selected";
+    }
+    html += ">Local only</option></select></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"primary hidden\" id=\"source-mode-apply-button\">Apply + Restart</button>";
+    html += "<div class=\"micro hidden\" id=\"source-mode-apply-hint\">A mode change rewires the active clients, so the ESP restarts right away after saving it.</div></div>";
     end_settings_panel();
-    html += "</div>";
-    end_collapsible_section();
-  } // wifi_configured (Device Settings)
 
-  // --- Printer Selection section ---
-  if (show_connection_steps) {
     const auto profiles = portal->config_store_.load_printer_profiles();
     const uint8_t active_idx = portal->config_store_.load_active_printer_index();
     const auto cloud_devices = portal->cloud_client_.get_cloud_devices();
     const std::string printer_count_str = std::to_string(profiles.size());
     const char* printer_badge_class = profiles.empty() ? "idle" : "ok";
-    begin_collapsible_section(
+    begin_settings_panel(
         "Printer Selection",
         "Switch between configured printers without rebooting. Cloud printers are automatically matched with local profiles by serial number.",
         printer_count_str + (profiles.size() == 1 ? " Printer" : " Printers"),
@@ -2127,16 +2168,23 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
               "<span id=\"cloud-printers-status\" style=\"margin-left:10px;font-size:0.85em;color:#888\"></span></div>";
     }
     html += "<div class=\"hint-box\"><strong>Tip:</strong> Selecting a printer reconnects all paths (cloud, local MQTT, camera) live — no reboot needed.</div>";
+    end_settings_panel();
+
+    // Bambu Cloud / Local Printer Path, sunk into this group once configured
+    // (prominent top-of-page placement while unconfigured is unaffected —
+    // that's the render_cloud_section(false)/render_local_section(false)
+    // calls near the top of this function).
+    if (cloud_section_configured) {
+      render_cloud_section(true);
+    }
+    if (!local_needs_setup) {
+      render_local_section(true);
+    }
+
+    html += "</div>";
     end_collapsible_section();
   }
 
-  // Configured provisioning sections (sunk to bottom)
-  if (show_connection_steps && cloud_section_configured) {
-    render_cloud_section();
-  }
-  if (show_connection_steps && !local_needs_setup) {
-    render_local_section();
-  }
   if (wifi_configured) {
     render_wifi_section();
   }
