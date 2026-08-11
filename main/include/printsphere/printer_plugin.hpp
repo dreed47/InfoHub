@@ -45,7 +45,7 @@ class PrinterPlugin : public Plugin {
 
   void build_tile(lv_obj_t*) override {}
   void build_screen(lv_obj_t*) override {}
-  void register_portal_routes(httpd_handle_t) override {}
+  void register_portal_routes(httpd_handle_t server) override;
   std::string portal_settings_html() const override { return {}; }
   void load_config() override {}
   void save_config() override {}
@@ -60,6 +60,23 @@ class PrinterPlugin : public Plugin {
   P1sCameraClient& camera_client() { return camera_client_; }
 
  private:
+  // Phase 8d: portal routes moved here from SetupPortal (printer_plugin_portal.cpp).
+  // Same handler shape as SetupPortal's — static + httpd_req_t::user_ctx — just
+  // registered against this plugin's own httpd_uri_t table.
+  static esp_err_t handle_arc_preview(httpd_req_t* request);
+  static esp_err_t handle_arc_commit(httpd_req_t* request);
+  static esp_err_t handle_arc_update(httpd_req_t* request, bool persist);
+  static esp_err_t handle_source_mode_post(httpd_req_t* request);
+  static esp_err_t handle_ams_display_post(httpd_req_t* request);
+  static esp_err_t handle_cloud_connect(httpd_req_t* request);
+  static esp_err_t handle_cloud_verify(httpd_req_t* request);
+  static esp_err_t handle_local_connect(httpd_req_t* request);
+  static esp_err_t handle_printers_get(httpd_req_t* request);
+  static esp_err_t handle_printers_select(httpd_req_t* request);
+  static esp_err_t handle_printers_save(httpd_req_t* request);
+  static esp_err_t handle_printers_delete(httpd_req_t* request);
+  static esp_err_t handle_printers_clear_local(httpd_req_t* request);
+
   // Core service references, captured during init(). Plugin is default-
   // constructed as an Application member before init() runs, so these start
   // null rather than being reference members.

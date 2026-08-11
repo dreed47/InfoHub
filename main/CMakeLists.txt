@@ -47,6 +47,7 @@ idf_component_register(
         "src/network_arbiter.cpp"
         "src/plugin_registry.cpp"
         "src/printer_plugin.cpp"
+        "src/printer_plugin_portal.cpp"
         "include/font/dosis_20.c"
         "include/font/dosis_32.c"
         "include/font/dosis_40.c"

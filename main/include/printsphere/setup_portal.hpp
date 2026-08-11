@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -10,6 +11,7 @@
 #include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
 #include "printsphere/p1s_camera_client.hpp"
+#include "printsphere/plugin.hpp"
 #include "printsphere/printer_client.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/wifi_manager.hpp"
@@ -45,9 +47,16 @@ class SetupPortal {
         pmu_manager_(pmu_manager),
         audio_notifier_(audio_notifier) {}
 
-  esp_err_t start();
+  esp_err_t start(const std::array<Plugin*, kMaxPlugins>& plugins);
   void request_unlock_pin();
   PortalAccessSnapshot access_snapshot(bool request_authorized = false);
+
+  // Public so plugin-owned portal routes (e.g. PrinterPlugin's, in
+  // printer_plugin_portal.cpp) can honor the PIN/session lock and trigger a
+  // reboot after saving settings, same as SetupPortal's own handlers do.
+  bool is_request_authorized(httpd_req_t* request);
+  esp_err_t send_locked_response(httpd_req_t* request);
+  void request_reboot();
 
  private:
   static esp_err_t handle_root(httpd_req_t* request);
@@ -58,27 +67,14 @@ class SetupPortal {
   static esp_err_t handle_config_get(httpd_req_t* request);
   static esp_err_t handle_config_post(httpd_req_t* request);
   static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
-  static esp_err_t handle_arc_preview(httpd_req_t* request);
-  static esp_err_t handle_arc_commit(httpd_req_t* request);
-  static esp_err_t handle_arc_update(httpd_req_t* request, bool persist);
-  static esp_err_t handle_source_mode_post(httpd_req_t* request);
   static esp_err_t handle_display_rotation_post(httpd_req_t* request);
   static esp_err_t handle_battery_display_post(httpd_req_t* request);
   static esp_err_t handle_portal_access_post(httpd_req_t* request);
-  static esp_err_t handle_ams_display_post(httpd_req_t* request);
   static esp_err_t handle_audio_post(httpd_req_t* request);
   static esp_err_t handle_audio_event_post(httpd_req_t* request);
   static esp_err_t handle_audio_upload(httpd_req_t* request);
   static esp_err_t handle_audio_clear(httpd_req_t* request);
   static esp_err_t handle_timezone_post(httpd_req_t* request);
-  static esp_err_t handle_cloud_connect(httpd_req_t* request);
-  static esp_err_t handle_cloud_verify(httpd_req_t* request);
-  static esp_err_t handle_local_connect(httpd_req_t* request);
-  static esp_err_t handle_printers_get(httpd_req_t* request);
-  static esp_err_t handle_printers_select(httpd_req_t* request);
-  static esp_err_t handle_printers_save(httpd_req_t* request);
-  static esp_err_t handle_printers_delete(httpd_req_t* request);
-  static esp_err_t handle_printers_clear_local(httpd_req_t* request);
   static esp_err_t handle_session_extend(httpd_req_t* request);
   static esp_err_t handle_ota_upload(httpd_req_t* request);
   static esp_err_t handle_ota_url(httpd_req_t* request);
@@ -90,8 +86,6 @@ class SetupPortal {
   static void reboot_task(void* context);
   bool is_provisioning_complete() const;
   bool is_lock_required() const;
-  bool is_request_authorized(httpd_req_t* request);
-  esp_err_t send_locked_response(httpd_req_t* request);
   esp_err_t send_unlock_page(httpd_req_t* request);
   void prune_access_state_locked(uint64_t now_ms);
   static std::string generate_unlock_pin();

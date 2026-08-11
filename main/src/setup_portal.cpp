@@ -22,6 +22,7 @@
 #include "freertos/task.h"
 #include "printsphere/bambu_status.hpp"
 #include "printsphere/debug_log_buffer.hpp"
+#include "printsphere/portal_shared.hpp"
 #include "printsphere/time_sync.hpp"
 #include "printsphere/ui.hpp"
 
@@ -47,6 +48,10 @@ constexpr char kFaviconSvg[] =
     "<circle cx=\"32\" cy=\"32\" r=\"18\" fill=\"none\" stroke=\"#f0a64b\" stroke-width=\"8\"/>"
     "</svg>";
 
+}  // namespace
+
+// Phase 8d: external linkage so PrinterPlugin's portal routes
+// (printer_plugin_portal.cpp) can reuse these — declared in portal_shared.hpp.
 std::string json_escape(const std::string& input) {
   std::string output;
   output.reserve(input.size());
@@ -135,36 +140,14 @@ std::string trim_copy(const std::string& input) {
   return input.substr(start, end - start);
 }
 
+namespace {
+
 WifiCredentials merge_wifi_credentials(WifiCredentials submitted,
                                        const WifiCredentials& stored) {
   if (submitted.password.empty() && !submitted.ssid.empty() && submitted.ssid == stored.ssid) {
     submitted.password = stored.password;
   }
   return submitted;
-}
-
-BambuCloudCredentials merge_cloud_credentials(BambuCloudCredentials submitted,
-                                              const BambuCloudCredentials& stored) {
-  if (submitted.password.empty() && !submitted.email.empty() && submitted.email == stored.email) {
-    submitted.password = stored.password;
-  }
-  return submitted;
-}
-
-PrinterConnection merge_printer_connection(PrinterConnection submitted,
-                                           const PrinterConnection& stored) {
-  if (submitted.access_code.empty() && !submitted.serial.empty() &&
-      submitted.serial == stored.serial) {
-    submitted.access_code = stored.access_code;
-  }
-  return submitted;
-}
-
-bool can_reuse_cloud_session(const BambuCloudCredentials& submitted,
-                             const BambuCloudCredentials& stored,
-                             const std::string& access_token) {
-  return !access_token.empty() && !submitted.email.empty() && submitted.email == stored.email &&
-         submitted.region == stored.region;
 }
 
 std::string color_to_html_hex(uint32_t color) {
@@ -194,76 +177,6 @@ bool parse_html_color(const std::string& input, uint32_t* color) {
 
   *color = static_cast<uint32_t>(std::strtoul(normalized.c_str(), nullptr, 16));
   return true;
-}
-
-bool is_valid_ipv4(const std::string& host) {
-  int dots = 0;
-  int octet_value = 0;
-  int octet_digits = 0;
-
-  for (size_t i = 0; i < host.size(); ++i) {
-    const char ch = host[i];
-    if (ch == '.') {
-      if (octet_digits == 0 || octet_value > 255) {
-        return false;
-      }
-      ++dots;
-      octet_value = 0;
-      octet_digits = 0;
-      continue;
-    }
-
-    if (ch < '0' || ch > '9') {
-      return false;
-    }
-
-    octet_value = (octet_value * 10) + (ch - '0');
-    ++octet_digits;
-    if (octet_digits > 3) {
-      return false;
-    }
-  }
-
-  return dots == 3 && octet_digits > 0 && octet_value <= 255;
-}
-
-bool is_valid_hostname(const std::string& host) {
-  if (host.empty() || host.size() > 253) {
-    return false;
-  }
-
-  bool saw_alpha = false;
-  size_t label_len = 0;
-  char prev = '\0';
-  for (const char ch : host) {
-    const bool is_alpha = std::isalpha(static_cast<unsigned char>(ch)) != 0;
-    const bool is_digit = std::isdigit(static_cast<unsigned char>(ch)) != 0;
-    if (is_alpha) {
-      saw_alpha = true;
-    }
-
-    if (is_alpha || is_digit || ch == '-') {
-      ++label_len;
-      if (label_len > 63) {
-        return false;
-      }
-    } else if (ch == '.') {
-      if (label_len == 0 || prev == '-') {
-        return false;
-      }
-      label_len = 0;
-    } else {
-      return false;
-    }
-
-    prev = ch;
-  }
-
-  return label_len > 0 && prev != '-' && saw_alpha;
-}
-
-bool is_valid_printer_host(const std::string& host) {
-  return is_valid_ipv4(host) || is_valid_hostname(host);
 }
 
 uint64_t now_ms() {
@@ -364,6 +277,8 @@ void append_portal_access_fields(std::string* body, const PortalAccessSnapshot& 
   }
 }
 
+}  // namespace
+
 void send_json(httpd_req_t* request, const std::string& body) {
   httpd_resp_set_type(request, "application/json");
   httpd_resp_set_hdr(request, "Cache-Control", "no-store");
@@ -428,6 +343,8 @@ bool parse_arc_colors_from_json(const cJSON* root, ArcColorScheme* colors) {
          parse_arc_field("arc_unknown", &colors->unknown);
 }
 
+namespace {
+
 std::string cloud_verify_label(const BambuCloudSnapshot& snapshot) {
   return snapshot.tfa_required ? "2FA Code" : "Verification Code";
 }
@@ -440,18 +357,6 @@ std::string cloud_verify_placeholder(const BambuCloudSnapshot& snapshot) {
 std::string cloud_verify_note(const BambuCloudSnapshot& snapshot) {
   return snapshot.tfa_required ? "Bambu is currently waiting for a 2FA code."
                                : "Bambu is currently waiting for a verification code. The cloud login completes after that step.";
-}
-
-SourceMode parse_source_mode_field(const cJSON* root) {
-  if (root == nullptr) {
-    return SourceMode::kHybrid;
-  }
-
-  std::string value = trim_copy(read_string_field(root, "source_mode"));
-  if (value.empty()) {
-    value = trim_copy(read_string_field(root, "state_source"));
-  }
-  return parse_source_mode(value);
 }
 
 DisplayRotation parse_display_rotation_field(const cJSON* root) {
@@ -502,6 +407,8 @@ std::string display_tilt_field_value(int deci_deg) {
   return std::string(buffer);
 }
 
+}  // namespace
+
 bool cloud_detail_is_transitional(const std::string& detail) {
   const std::string normalized = normalize_bambu_status_token(detail);
   return normalized == "LOGGING IN TO BAMBU CLOUD" ||
@@ -509,24 +416,7 @@ bool cloud_detail_is_transitional(const std::string& detail) {
          normalized == "RESTORED BAMBU CLOUD SESSION";
 }
 
-bool cloud_stage_is_user_visible_progress(CloudSetupStage stage) {
-  switch (stage) {
-    case CloudSetupStage::kEmailCodeRequired:
-    case CloudSetupStage::kTfaRequired:
-    case CloudSetupStage::kBindingPrinter:
-    case CloudSetupStage::kConnectingMqtt:
-    case CloudSetupStage::kConnected:
-    case CloudSetupStage::kFailed:
-      return true;
-    case CloudSetupStage::kIdle:
-    case CloudSetupStage::kLoggingIn:
-    case CloudSetupStage::kCodeSubmitted:
-    default:
-      return false;
-  }
-}
-
-bool cloud_portal_ready(const BambuCloudSnapshot& snapshot);
+namespace {
 
 struct CloudPortalPresentation {
   BambuCloudSnapshot snapshot{};
@@ -537,58 +427,7 @@ struct CloudPortalPresentation {
   std::string status_detail = "No cloud response yet";
 };
 
-bool cloud_connect_result_ready(const BambuCloudSnapshot& before,
-                                const BambuCloudSnapshot& current) {
-  if (!cloud_portal_ready(before) && cloud_portal_ready(current)) {
-    return true;
-  }
-  if ((!before.verification_required && current.verification_required) ||
-      (!before.tfa_required && current.tfa_required)) {
-    return true;
-  }
-  if (cloud_stage_is_user_visible_progress(current.setup_stage) &&
-      current.setup_stage != before.setup_stage) {
-    return true;
-  }
-
-  if (current.configured != before.configured ||
-      current.resolved_serial != before.resolved_serial) {
-    return true;
-  }
-
-  if (current.detail == before.detail) {
-    return false;
-  }
-
-  return !cloud_detail_is_transitional(current.detail);
-}
-
-bool cloud_verify_result_ready(const BambuCloudSnapshot& before,
-                               const BambuCloudSnapshot& current) {
-  if (!cloud_portal_ready(before) && cloud_portal_ready(current)) {
-    return true;
-  }
-  if ((!before.verification_required && current.verification_required) ||
-      (!before.tfa_required && current.tfa_required)) {
-    return true;
-  }
-  if (cloud_stage_is_user_visible_progress(current.setup_stage) &&
-      current.setup_stage != before.setup_stage) {
-    return true;
-  }
-  if (current.resolved_serial != before.resolved_serial) {
-    return true;
-  }
-  if (current.detail == before.detail) {
-    return false;
-  }
-  if (current.setup_stage == CloudSetupStage::kFailed) {
-    return true;
-  }
-  return !cloud_detail_is_transitional(current.detail) &&
-         current.setup_stage != CloudSetupStage::kCodeSubmitted &&
-         current.setup_stage != CloudSetupStage::kLoggingIn;
-}
+}  // namespace
 
 bool cloud_portal_ready(const BambuCloudSnapshot& snapshot) {
   if (!snapshot.configured || snapshot.verification_required || snapshot.tfa_required) {
@@ -612,6 +451,8 @@ bool cloud_portal_ready(const BambuCloudSnapshot& snapshot) {
       return false;
   }
 }
+
+namespace {
 
 BambuCloudSnapshot portal_cloud_view(BambuCloudSnapshot snapshot) {
   if (!cloud_portal_ready(snapshot)) {
@@ -694,14 +535,7 @@ CloudPortalPresentation cloud_portal_presentation(const BambuCloudSnapshot& clou
   return presentation;
 }
 
-bool cloud_login_still_pending(const BambuCloudSnapshot& snapshot) {
-  if (!snapshot.configured || cloud_portal_ready(snapshot) || snapshot.verification_required ||
-      snapshot.tfa_required) {
-    return false;
-  }
-
-  return snapshot.setup_stage != CloudSetupStage::kFailed;
-}
+}  // namespace
 
 void append_cloud_status_fields(std::string* body, const BambuCloudSnapshot& cloud) {
   if (body == nullptr) {
@@ -747,6 +581,8 @@ void append_local_status_fields(std::string* body, const PrinterSnapshot& local,
   *body += (local_configured ? "true" : "false");
   *body += ",\"local_detail\":\"" + json_escape(local.detail) + "\"";
 }
+
+namespace {
 
 // Reconnect-storm telemetry — see MqttTelemetry. Emitted with stable JSON keys
 // (mqtt_local_*, mqtt_cloud_*) so the setup-portal status page can render a
@@ -1027,7 +863,7 @@ esp_err_t SetupPortal::send_unlock_page(httpd_req_t* request) {
   return httpd_resp_send(request, html.c_str(), html.size());
 }
 
-esp_err_t SetupPortal::start() {
+esp_err_t SetupPortal::start(const std::array<Plugin*, kMaxPlugins>& plugins) {
   if (server_ != nullptr) {
     return ESP_OK;
   }
@@ -1044,8 +880,8 @@ esp_err_t SetupPortal::start() {
   // Phase 7 (plugin-architecture extraction, see CLAUDE.md): route registration
   // is table-driven instead of ~30 hand-written httpd_uri_t + register blocks.
   // Same URIs, same methods, same handlers, same registration order — zero
-  // behavior change. This is the shape a future plugin's register_portal_routes()
-  // reuses instead of enumerating routes by hand in start().
+  // behavior change. Phase 8d moved the printer-domain routes out of this
+  // table into PrinterPlugin::register_portal_routes(), called below.
   struct RouteEntry {
     const char* uri;
     httpd_method_t method;
@@ -1060,26 +896,14 @@ esp_err_t SetupPortal::start() {
       {"/api/config", HTTP_GET, &SetupPortal::handle_config_get},
       {"/api/config", HTTP_POST, &SetupPortal::handle_config_post},
       {"/api/plugins/printer/config", HTTP_GET, &SetupPortal::handle_plugin_printer_config_get},
-      {"/api/arc/preview", HTTP_POST, &SetupPortal::handle_arc_preview},
-      {"/api/arc/commit", HTTP_POST, &SetupPortal::handle_arc_commit},
-      {"/api/source-mode", HTTP_POST, &SetupPortal::handle_source_mode_post},
       {"/api/display-rotation", HTTP_POST, &SetupPortal::handle_display_rotation_post},
       {"/api/battery-display", HTTP_POST, &SetupPortal::handle_battery_display_post},
       {"/api/portal-access", HTTP_POST, &SetupPortal::handle_portal_access_post},
-      {"/api/ams-display", HTTP_POST, &SetupPortal::handle_ams_display_post},
       {"/api/timezone", HTTP_POST, &SetupPortal::handle_timezone_post},
       {"/api/audio", HTTP_POST, &SetupPortal::handle_audio_post},
       {"/api/audio/event", HTTP_POST, &SetupPortal::handle_audio_event_post},
       {"/api/audio/upload", HTTP_POST, &SetupPortal::handle_audio_upload},
       {"/api/audio/clear", HTTP_POST, &SetupPortal::handle_audio_clear},
-      {"/api/cloud/connect", HTTP_POST, &SetupPortal::handle_cloud_connect},
-      {"/api/cloud/verify", HTTP_POST, &SetupPortal::handle_cloud_verify},
-      {"/api/local/connect", HTTP_POST, &SetupPortal::handle_local_connect},
-      {"/api/printers", HTTP_GET, &SetupPortal::handle_printers_get},
-      {"/api/printers/select", HTTP_POST, &SetupPortal::handle_printers_select},
-      {"/api/printers/save", HTTP_POST, &SetupPortal::handle_printers_save},
-      {"/api/printers/delete", HTTP_POST, &SetupPortal::handle_printers_delete},
-      {"/api/printers/clear-local", HTTP_POST, &SetupPortal::handle_printers_clear_local},
       {"/api/session/extend", HTTP_POST, &SetupPortal::handle_session_extend},
       {"/api/ota/upload", HTTP_POST, &SetupPortal::handle_ota_upload},
       {"/api/ota/url", HTTP_POST, &SetupPortal::handle_ota_url},
@@ -1105,6 +929,12 @@ esp_err_t SetupPortal::start() {
   ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server_, &debug_log_uri), kTag,
                       "debug log handler failed");
 #endif
+
+  for (Plugin* plugin : plugins) {
+    if (plugin != nullptr) {
+      plugin->register_portal_routes(server_);
+    }
+  }
 
   ESP_LOGI(kTag, "Setup portal started");
   return ESP_OK;
@@ -3497,87 +3327,6 @@ esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
   return ESP_OK;
 }
 
-esp_err_t SetupPortal::handle_arc_preview(httpd_req_t* request) {
-  return handle_arc_update(request, false);
-}
-
-esp_err_t SetupPortal::handle_arc_commit(httpd_req_t* request) {
-  return handle_arc_update(request, true);
-}
-
-esp_err_t SetupPortal::handle_arc_update(httpd_req_t* request, bool persist) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
-  const bool colors_valid = parse_arc_colors_from_json(root, &arc_colors);
-  cJSON_Delete(root);
-
-  if (!colors_valid) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "invalid arc color value");
-  }
-
-  portal->ui_.set_arc_color_scheme(arc_colors);
-  if (persist) {
-    const esp_err_t save_err = portal->config_store_.save_arc_color_scheme(arc_colors);
-    if (save_err != ESP_OK) {
-      ESP_LOGE(kTag, "save live arc colors failed: %s", esp_err_to_name(save_err));
-      return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
-                                 "save live arc colors failed");
-    }
-  }
-
-  std::string body = "{\"status\":\"";
-  body += persist ? "saved" : "previewed";
-  body += "\",\"persisted\":";
-  body += persist ? "true" : "false";
-  body += "}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_source_mode_post(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  const SourceMode source_mode = parse_source_mode_field(root);
-  cJSON_Delete(root);
-
-  ESP_LOGI(kTag, "Saving source mode only: %s", to_string(source_mode));
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_source_mode(source_mode), kTag,
-                      "save source mode failed");
-
-  if (!portal->reboot_requested_) {
-    portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
-  }
-
-  send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
-  return ESP_OK;
-}
-
 esp_err_t SetupPortal::handle_display_rotation_post(httpd_req_t* request) {
   auto* portal = static_cast<SetupPortal*>(request->user_ctx);
   if (portal == nullptr) {
@@ -3697,43 +3446,6 @@ esp_err_t SetupPortal::handle_portal_access_post(httpd_req_t* request) {
            portal_lock_enabled ? "lock enabled" : "lock disabled");
   ESP_RETURN_ON_ERROR(portal->config_store_.save_portal_lock_enabled(portal_lock_enabled), kTag,
                       "save portal lock failed");
-
-  if (!portal->reboot_requested_) {
-    portal->reboot_requested_ = true;
-    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, portal, 4, nullptr);
-  }
-
-  send_json(request, "{\"status\":\"saved\",\"rebooting\":true}");
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_ams_display_post(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  const bool filament_wake = read_bool_field(root, "filament_wake",
-      portal->config_store_.load_filament_wake_enabled());
-  const bool filament_anim = read_bool_field(root, "filament_anim",
-      portal->config_store_.load_filament_anim_enabled());
-  cJSON_Delete(root);
-
-  ESP_LOGI(kTag, "Saving AMS display: wake=%d anim=%d",
-           filament_wake, filament_anim);
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_filament_wake_enabled(filament_wake), kTag,
-                      "save filament wake failed");
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_filament_anim_enabled(filament_anim), kTag,
-                      "save filament anim failed");
 
   if (!portal->reboot_requested_) {
     portal->reboot_requested_ = true;
@@ -4094,558 +3806,6 @@ esp_err_t SetupPortal::handle_audio_clear(httpd_req_t* request) {
   return ESP_OK;
 }
 
-esp_err_t SetupPortal::handle_cloud_connect(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  const BambuCloudCredentials stored_cloud = portal->config_store_.load_cloud_credentials();
-  const std::string stored_cloud_access_token = portal->config_store_.load_cloud_access_token();
-  const BambuCloudCredentials cloud = merge_cloud_credentials({
-      .email = trim_copy(read_string_field(root, "cloud_email")),
-      .password = read_string_field(root, "cloud_password"),
-      .region = parse_cloud_region(trim_copy(read_string_field(root, "cloud_region"))),
-  }, stored_cloud);
-  const SourceMode source_mode = parse_source_mode_field(root);
-  cJSON_Delete(root);
-
-  if (!cloud.is_configured() &&
-      !can_reuse_cloud_session(cloud, stored_cloud, stored_cloud_access_token)) {
-    httpd_resp_set_status(request, "400 Bad Request");
-    send_json(request,
-              "{\"error\":\"Cloud credentials incomplete\",\"detail\":\"Enter both Bambu email and password first.\"}");
-    return ESP_OK;
-  }
-
-  if (!portal->wifi_manager_.is_station_connected()) {
-    httpd_resp_set_status(request, "409 Conflict");
-    send_json(request,
-              "{\"error\":\"Wi-Fi not ready\",\"detail\":\"Save Wi-Fi and reboot first. Cloud login starts after the ESP is on your home network.\"}");
-    return ESP_OK;
-  }
-
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_cloud_credentials(cloud), kTag, "save cloud failed");
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_source_mode(source_mode), kTag,
-                      "save source mode failed");
-  if (source_mode == SourceMode::kLocalOnly) {
-    send_json(
-        request,
-        "{\"status\":\"saved\",\"detail\":\"Cloud credentials saved. Switch source mode to Hybrid or Cloud only to connect.\",\"cloud_connected\":false,\"cloud_verification_required\":false,\"cloud_tfa_required\":false,\"cloud_configured\":true,\"cloud_detail\":\"Cloud credentials saved. Switch source mode to Hybrid or Cloud only to connect.\",\"cloud_resolved_serial\":\"\"}");
-    return ESP_OK;
-  }
-  portal->cloud_client_.request_reload_from_store();
-
-  const BambuCloudSnapshot before = portal->cloud_client_.snapshot();
-  BambuCloudSnapshot current = before;
-  for (int attempt = 0; attempt < 60; ++attempt) {
-    vTaskDelay(pdMS_TO_TICKS(100));
-    current = portal->cloud_client_.refreshed_snapshot();
-    if (cloud_connect_result_ready(before, current)) {
-      break;
-    }
-  }
-
-  const bool login_still_pending = cloud_login_still_pending(current);
-  if (current.setup_stage == CloudSetupStage::kFailed) {
-    httpd_resp_set_status(request, "502 Bad Gateway");
-  }
-
-  std::string body = "{\"status\":\"";
-  if (cloud_portal_ready(current)) {
-    body += "connected";
-  } else if (current.verification_required) {
-    body += "verification_required";
-  } else if (current.setup_stage == CloudSetupStage::kFailed) {
-    body += "failed";
-  } else if (login_still_pending) {
-    body += "queued";
-  } else {
-    body += "saved";
-  }
-  body += "\",\"detail\":\"";
-  body += json_escape(current.detail);
-  body += "\"";
-  append_cloud_status_fields(&body, current);
-  body += "}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_cloud_verify(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  const std::string code = trim_copy(read_string_field(root, "code"));
-  cJSON_Delete(root);
-  if (code.empty()) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "verification code missing");
-  }
-
-  BambuCloudSnapshot snapshot = portal->cloud_client_.snapshot();
-  const std::string previous_detail = snapshot.detail;
-  const std::string previous_resolved_serial = snapshot.resolved_serial;
-  const bool previous_connected = snapshot.connected;
-  const bool previous_session_connected = snapshot.session_connected;
-  const bool previous_verification_required = snapshot.verification_required;
-  const bool previous_configured = snapshot.configured;
-  const CloudSetupStage previous_setup_stage = snapshot.setup_stage;
-  BambuCloudSnapshot previous_snapshot;
-  previous_snapshot.configured = previous_configured;
-  previous_snapshot.connected = previous_connected;
-  previous_snapshot.session_connected = previous_session_connected;
-  previous_snapshot.setup_stage = previous_setup_stage;
-  previous_snapshot.detail = previous_detail;
-  previous_snapshot.resolved_serial = previous_resolved_serial;
-  previous_snapshot.verification_required = previous_verification_required;
-
-  portal->cloud_client_.submit_verification_code(code);
-  for (int attempt = 0; attempt < 80; ++attempt) {
-    vTaskDelay(pdMS_TO_TICKS(100));
-    snapshot = portal->cloud_client_.refreshed_snapshot();
-    if (cloud_verify_result_ready(previous_snapshot, snapshot)) {
-      break;
-    }
-  }
-
-  const bool login_still_pending = cloud_login_still_pending(snapshot);
-  if (snapshot.verification_required) {
-    httpd_resp_set_status(request, "409 Conflict");
-  } else if (snapshot.setup_stage == CloudSetupStage::kFailed ||
-             (!cloud_portal_ready(snapshot) && !login_still_pending)) {
-    httpd_resp_set_status(request, "502 Bad Gateway");
-  }
-
-  std::string body = "{\"status\":\"";
-  if (cloud_portal_ready(snapshot)) {
-    body += "connected";
-  } else if (snapshot.verification_required) {
-    body += "verification_required";
-  } else if (login_still_pending) {
-    body += "queued";
-  } else {
-    body += "failed";
-  }
-  body += "\",\"detail\":\"";
-  body += json_escape(snapshot.detail);
-  body += "\"";
-  append_cloud_status_fields(&body, snapshot);
-  body += "}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_local_connect(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) {
-    return parse_err;
-  }
-
-  const PrinterConnection stored_printer = portal->config_store_.load_active_printer_profile().to_connection();
-  const PrinterConnection printer = merge_printer_connection({
-      .host = trim_copy(read_string_field(root, "printer_host")),
-      .serial = trim_copy(read_string_field(root, "printer_serial")),
-      .access_code = trim_copy(read_string_field(root, "printer_access_code")),
-  }, stored_printer);
-  const SourceMode source_mode = parse_source_mode_field(root);
-  cJSON_Delete(root);
-
-  if (!printer.is_ready()) {
-    httpd_resp_set_status(request, "400 Bad Request");
-    send_json(request,
-              "{\"error\":\"Local printer fields incomplete\",\"detail\":\"Enter printer host, serial and access code first.\"}");
-    return ESP_OK;
-  }
-  if (!is_valid_printer_host(printer.host)) {
-    httpd_resp_set_status(request, "400 Bad Request");
-    send_json(request,
-              "{\"error\":\"Invalid printer host\",\"detail\":\"Printer host must be a full IPv4 address or hostname.\"}");
-    return ESP_OK;
-  }
-  if (!portal->wifi_manager_.is_station_connected()) {
-    httpd_resp_set_status(request, "409 Conflict");
-    send_json(request,
-              "{\"error\":\"Wi-Fi not ready\",\"detail\":\"Save Wi-Fi and reboot first. The local path starts after the ESP is on your home network.\"}");
-    return ESP_OK;
-  }
-
-  ESP_RETURN_ON_ERROR(portal->config_store_.save_source_mode(source_mode), kTag,
-                      "save source mode failed");
-
-  // Upsert into multi-profile system
-  {
-    auto profiles = portal->config_store_.load_printer_profiles();
-    PrinterProfile profile;
-    bool found = false;
-    for (const auto& p : profiles) {
-      if (p.serial == printer.serial) { profile = p; found = true; break; }
-    }
-    if (!found) {
-      profile.index = static_cast<uint8_t>(profiles.size());
-    }
-    profile.serial = printer.serial;
-    profile.host = printer.host;
-    profile.access_code = printer.access_code;
-    if (profile.display_name.empty() || profile.model.empty() || !profile.cloud_bound) {
-      // Try to resolve model name from cloud device list
-      const auto cloud_devs = portal->cloud_client_.get_cloud_devices();
-      for (const auto& cd : cloud_devs) {
-        if (cd.serial == printer.serial) {
-          if (profile.display_name.empty()) {
-            profile.display_name = !cd.display_name.empty() ? cd.display_name : to_string(cd.model);
-          }
-          if (profile.model.empty()) {
-            profile.model = to_string(cd.model);
-          }
-          profile.cloud_bound = true;
-          break;
-        }
-      }
-    }
-    if (profile.index < kMaxPrinterProfiles) {
-      portal->config_store_.save_printer_profile(profile);
-      portal->config_store_.save_active_printer_index(profile.index);
-    }
-  }
-  if (source_mode == SourceMode::kCloudOnly) {
-    send_json(
-        request,
-        "{\"status\":\"saved\",\"detail\":\"Local printer credentials saved. Switch source mode to Hybrid or Local only to connect.\",\"local_error\":false,\"local_connected\":false,\"local_configured\":true,\"local_detail\":\"Local printer credentials saved. Switch source mode to Hybrid or Local only to connect.\"}");
-    return ESP_OK;
-  }
-
-  const PrinterSnapshot before = portal->printer_client_.snapshot();
-  portal->printer_client_.configure(printer);
-  portal->camera_client_.configure(printer);
-
-  PrinterSnapshot current = before;
-  for (int attempt = 0; attempt < 80; ++attempt) {
-    vTaskDelay(pdMS_TO_TICKS(100));
-    current = portal->printer_client_.snapshot();
-    if (current.connection == PrinterConnectionState::kOnline ||
-        current.connection == PrinterConnectionState::kError ||
-        current.local_configured != before.local_configured ||
-        current.detail != before.detail || current.stage != before.stage ||
-        current.resolved_serial != before.resolved_serial) {
-      break;
-    }
-  }
-
-  const bool local_pending = current.local_configured &&
-                             current.connection != PrinterConnectionState::kOnline &&
-                             current.connection != PrinterConnectionState::kError;
-  if (current.connection == PrinterConnectionState::kError) {
-    httpd_resp_set_status(request, "502 Bad Gateway");
-  }
-
-  std::string body = "{\"status\":\"";
-  if (current.connection == PrinterConnectionState::kOnline) {
-    body += "connected";
-  } else if (current.connection == PrinterConnectionState::kError) {
-    body += "error";
-  } else if (local_pending) {
-    body += "queued";
-  } else {
-    body += "saved";
-  }
-  body += "\",\"detail\":\"";
-  body += json_escape(current.detail);
-  body += "\"";
-  append_local_status_fields(&body, current, true);
-  body += "}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-// ---------------------------------------------------------------------------
-// Printer profile REST endpoints
-// ---------------------------------------------------------------------------
-
-esp_err_t SetupPortal::handle_printers_get(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  const auto profiles = portal->config_store_.load_printer_profiles();
-  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-  const auto cloud_devices = portal->cloud_client_.get_cloud_devices();
-
-  std::string body = "{\"active\":";
-  body += std::to_string(active_idx);
-  body += ",\"profiles\":[";
-  for (size_t i = 0; i < profiles.size(); ++i) {
-    if (i > 0) body += ",";
-    const auto& p = profiles[i];
-    body += "{\"index\":";
-    body += std::to_string(p.index);
-    body += ",\"serial\":\"";
-    body += json_escape(p.serial);
-    body += "\",\"host\":\"";
-    body += json_escape(p.host);
-    body += "\",\"display_name\":\"";
-    body += json_escape(p.display_name);
-    body += "\",\"model\":\"";
-    body += json_escape(p.model);
-    body += "\",\"has_local\":";
-    body += p.has_local_config() ? "true" : "false";
-    body += ",\"cloud_bound\":";
-    body += p.cloud_bound ? "true" : "false";
-    body += "}";
-  }
-  body += "],\"cloud_devices\":[";
-  for (size_t i = 0; i < cloud_devices.size(); ++i) {
-    if (i > 0) body += ",";
-    const auto& cd = cloud_devices[i];
-    body += "{\"serial\":\"";
-    body += json_escape(cd.serial);
-    body += "\",\"display_name\":\"";
-    body += json_escape(cd.display_name);
-    body += "\",\"model\":\"";
-    body += to_string(cd.model);
-    body += "\",\"online\":";
-    body += cd.online ? "true" : "false";
-    body += "}";
-  }
-  body += "]}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_printers_select(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const cJSON* index_item = cJSON_GetObjectItem(root, "index");
-  if (!cJSON_IsNumber(index_item)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "index field required");
-  }
-  const uint8_t new_index = static_cast<uint8_t>(cJSON_GetNumberValue(index_item));
-  cJSON_Delete(root);
-
-  const auto profiles = portal->config_store_.load_printer_profiles();
-  const PrinterProfile* selected = nullptr;
-  for (const auto& p : profiles) {
-    if (p.index == new_index) { selected = &p; break; }
-  }
-  if (selected == nullptr) {
-    httpd_resp_set_status(request, "404 Not Found");
-    send_json(request, "{\"error\":\"Profile not found\"}");
-    return ESP_OK;
-  }
-
-  portal->config_store_.save_active_printer_index(new_index);
-
-  // Live-reconnect all clients
-  const PrinterConnection conn = selected->to_connection();
-  if (conn.is_ready()) {
-    portal->printer_client_.configure(conn);
-    portal->camera_client_.configure(conn);
-  }
-  const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
-  portal->cloud_client_.configure(cloud_creds, selected->serial);
-
-  std::string body = "{\"status\":\"ok\",\"printer\":\"";
-  body += json_escape(selected->display_name.empty() ? selected->serial : selected->display_name);
-  body += "\"}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_printers_save(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const std::string serial = trim_copy(read_string_field(root, "serial"));
-  const std::string host = trim_copy(read_string_field(root, "host"));
-  const std::string access_code = trim_copy(read_string_field(root, "access_code"));
-  const std::string display_name = trim_copy(read_string_field(root, "display_name"));
-  const std::string model = trim_copy(read_string_field(root, "model"));
-  const cJSON* cloud_bound_item = cJSON_GetObjectItem(root, "cloud_bound");
-  const bool cloud_bound_explicit = cJSON_IsBool(cloud_bound_item) && cJSON_IsTrue(cloud_bound_item);
-  cJSON_Delete(root);
-
-  if (serial.empty()) {
-    httpd_resp_set_status(request, "400 Bad Request");
-    send_json(request, "{\"error\":\"Serial number is required\"}");
-    return ESP_OK;
-  }
-
-  // Check if a profile with this serial already exists — update it
-  auto profiles = portal->config_store_.load_printer_profiles();
-  PrinterProfile profile;
-  bool found = false;
-  for (const auto& p : profiles) {
-    if (p.serial == serial) {
-      profile = p;
-      found = true;
-      break;
-    }
-  }
-  if (!found) {
-    profile.index = static_cast<uint8_t>(profiles.size());
-    if (profile.index >= kMaxPrinterProfiles) {
-      httpd_resp_set_status(request, "507 Insufficient Storage");
-      send_json(request, "{\"error\":\"Maximum number of printer profiles reached\"}");
-      return ESP_OK;
-    }
-  }
-
-  profile.serial = serial;
-  if (!host.empty()) profile.host = host;
-  if (!access_code.empty()) profile.access_code = access_code;
-  if (!display_name.empty()) profile.display_name = display_name;
-  if (!model.empty()) profile.model = model;
-  if (cloud_bound_explicit) profile.cloud_bound = true;
-  // Update cloud_bound from live cloud device list
-  if (!profile.cloud_bound) {
-    const auto cloud_devs = portal->cloud_client_.get_cloud_devices();
-    for (const auto& cd : cloud_devs) {
-      if (cd.serial == serial) { profile.cloud_bound = true; break; }
-    }
-  }
-  portal->config_store_.save_printer_profile(profile);
-
-  std::string body = "{\"status\":\"saved\",\"index\":";
-  body += std::to_string(profile.index);
-  body += "}";
-  send_json(request, body);
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_printers_delete(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const cJSON* index_item = cJSON_GetObjectItem(root, "index");
-  if (!cJSON_IsNumber(index_item)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "index field required");
-  }
-  const uint8_t del_index = static_cast<uint8_t>(cJSON_GetNumberValue(index_item));
-  cJSON_Delete(root);
-
-  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-  const esp_err_t err = portal->config_store_.delete_printer_profile(del_index);
-  if (err != ESP_OK) {
-    httpd_resp_set_status(request, "404 Not Found");
-    send_json(request, "{\"error\":\"Profile not found\"}");
-    return ESP_OK;
-  }
-
-  // If the deleted profile was the active one, clear legacy config and disconnect clients
-  if (del_index == active_idx) {
-    const PrinterConnection empty_conn;
-    portal->printer_client_.configure(empty_conn);
-    portal->camera_client_.configure(empty_conn);
-    // Reconfigure cloud to drop the serial binding
-    const BambuCloudCredentials cloud_creds = portal->config_store_.load_cloud_credentials();
-    portal->cloud_client_.configure(cloud_creds, "");
-    // Switch active to first remaining profile if any
-    const auto remaining = portal->config_store_.load_printer_profiles();
-    if (!remaining.empty()) {
-      portal->config_store_.save_active_printer_index(remaining.front().index);
-      const PrinterConnection new_conn = remaining.front().to_connection();
-      if (new_conn.is_ready()) {
-        portal->printer_client_.configure(new_conn);
-        portal->camera_client_.configure(new_conn);
-      }
-      portal->cloud_client_.configure(cloud_creds, remaining.front().serial);
-    }
-  }
-
-  send_json(request, "{\"status\":\"deleted\"}");
-  return ESP_OK;
-}
-
-esp_err_t SetupPortal::handle_printers_clear_local(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const cJSON* index_item = cJSON_GetObjectItem(root, "index");
-  if (!cJSON_IsNumber(index_item)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "index field required");
-  }
-  const uint8_t idx = static_cast<uint8_t>(cJSON_GetNumberValue(index_item));
-  cJSON_Delete(root);
-
-  auto profiles = portal->config_store_.load_printer_profiles();
-  PrinterProfile* target = nullptr;
-  for (auto& p : profiles) {
-    if (p.index == idx) { target = &p; break; }
-  }
-  if (target == nullptr) {
-    httpd_resp_set_status(request, "404 Not Found");
-    send_json(request, "{\"error\":\"Profile not found\"}");
-    return ESP_OK;
-  }
-
-  target->host.clear();
-  target->access_code.clear();
-  portal->config_store_.save_printer_profile(*target);
-
-  // If this is the active profile, disconnect local clients
-  const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-  if (idx == active_idx) {
-    const PrinterConnection empty_conn;
-    portal->printer_client_.configure(empty_conn);
-    portal->camera_client_.configure(empty_conn);
-  }
-
-  send_json(request, "{\"status\":\"local_cleared\"}");
-  return ESP_OK;
-}
-
 esp_err_t SetupPortal::handle_ota_upload(httpd_req_t* request) {
   auto* portal = static_cast<SetupPortal*>(request->user_ctx);
   if (portal == nullptr) {
@@ -4742,6 +3902,13 @@ esp_err_t SetupPortal::handle_ota_upload(httpd_req_t* request) {
 void SetupPortal::reboot_task(void*) {
   vTaskDelay(pdMS_TO_TICKS(1500));
   esp_restart();
+}
+
+void SetupPortal::request_reboot() {
+  if (!reboot_requested_) {
+    reboot_requested_ = true;
+    xTaskCreate(&SetupPortal::reboot_task, "portal_reboot", 2048, this, 4, nullptr);
+  }
 }
 
 esp_err_t SetupPortal::handle_ota_url(httpd_req_t* request) {

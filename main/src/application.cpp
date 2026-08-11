@@ -110,7 +110,7 @@ void Application::run() {
     }
   }
 
-  ESP_ERROR_CHECK(setup_portal_.start());
+  ESP_ERROR_CHECK(setup_portal_.start(plugins_));
   if (serial_provisioner_.start() != ESP_OK) {
     ESP_LOGW(kTag, "USB Wi-Fi setup unavailable; use the fallback setup access point");
   }
