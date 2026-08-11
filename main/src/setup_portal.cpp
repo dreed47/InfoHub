@@ -1185,6 +1185,18 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     local_badge_value = "Configured";
     local_badge_class = "info";
   }
+  // Single aggregate badge for the printer plugin, replacing the old
+  // Cloud/Source/Local Path triplet in the top badge strip — one badge per
+  // plugin domain (Wi-Fi is core, everything else here is printer-owned),
+  // reused for the collapsible "Printer" section's own header badge below.
+  const std::string printer_group_badge_value =
+      local_snapshot.local_connected
+          ? local_badge_value
+          : (cloud_snapshot.connected ? cloud_badge_value : std::string("Setup"));
+  const char* printer_group_badge_class =
+      local_snapshot.local_connected
+          ? local_badge_class
+          : (cloud_snapshot.connected ? cloud_badge_class : "idle");
   const bool setup_fully_complete = show_connection_steps &&
       (cloud_snapshot.configured || local_configured) &&
       (!cloud_snapshot.configured || cloud_portal.ready ||
@@ -1471,9 +1483,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "<div class=\"badge-grid\">";
   add_badge(&html, "wifi-badge", "Wi-Fi", wifi_badge_value, wifi_badge_class);
   if (show_connection_steps) {
-    add_badge(&html, "cloud-badge", "Cloud", cloud_badge_value, cloud_badge_class);
-    add_badge(&html, "source-badge", "Source", source_badge_value, "info");
-    add_badge(&html, "local-badge", "Local Path", local_badge_value, local_badge_class);
+    add_badge(&html, "printer-badge", "Printer", printer_group_badge_value, printer_group_badge_class);
   }
   html += "</div>";
   html += "<div class=\"hint-box\"><strong>Note:</strong> ";
@@ -1881,14 +1891,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   // Portal Access, Time Zone) stay in Device Settings above / their own
   // sections — this block is exclusively printer-plugin-owned.
   if (show_connection_steps) {
-    const std::string printer_group_badge_value =
-        local_snapshot.local_connected
-            ? local_badge_value
-            : (cloud_snapshot.connected ? cloud_badge_value : std::string("Setup"));
-    const char* printer_group_badge_class =
-        local_snapshot.local_connected
-            ? local_badge_class
-            : (cloud_snapshot.connected ? cloud_badge_class : "idle");
+    // printer_group_badge_value/class computed once, near the top badge
+    // strip — reused here for this section's own header badge.
     begin_collapsible_section(
         "Printer",
         "Bambu printer connection, AMS display, sound events and connection mode — everything specific to the printer plugin.",
@@ -2474,10 +2478,12 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "setBadge('wifi-badge','Wi-Fi',wifiValue,body.wifi_connected?'ok':'warn');"
           "var wd=document.getElementById('wifi-detail');if(wd){wd.textContent=wifiValue;}"
           "renderCloudStatus(body);"
-          "const sourceMode=body.source_mode||savedConfig.source_mode||'hybrid';"
-          "const sourceValue=sourceMode==='local_only'?'Local only':(sourceMode==='cloud_only'?'Cloud only':'Hybrid (recommended)');"
-          "setBadge('source-badge','Source',sourceValue,'info');"
           "renderLocalStatus(body);"
+          "const printerReady=!!(body.local_connected||body.cloud_connected);"
+          "const printerConfigured=!!(body.local_configured||body.cloud_configured);"
+          "const printerValue=printerReady?'Connected':(printerConfigured?'Configured':'Setup');"
+          "const printerState=printerReady?'ok':(printerConfigured?'info':'idle');"
+          "setBadge('printer-badge','Printer',printerValue,printerState);"
           "renderMqttTelemetry(body);"
           "if(Date.now()>statusLockUntil){"
           "if(body.wifi_connected){const setupDone=(body.cloud_configured||body.local_configured)&&(!body.cloud_configured||body.cloud_portal_ready||(!body.cloud_verification_required&&!body.cloud_tfa_required&&cloudSetupStage(body)!=='failed'))&&(!body.local_configured||!body.local_error);if(setupDone){setStatus('','',0);}else if(body.cloud_status_line){setStatus(body.cloud_status_line,body.cloud_status_detail||body.cloud_detail||body.detail||'',0);}"
