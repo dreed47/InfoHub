@@ -247,6 +247,7 @@ esp_err_t PrinterPlugin::handle_arc_update(httpd_req_t* request, bool persist) {
   }
 
   plugin->ui_->set_arc_color_scheme(arc_colors);
+  plugin->apply_ring_visual();
   if (persist) {
     const esp_err_t save_err = plugin->config_store_->save_arc_color_scheme(arc_colors);
     if (save_err != ESP_OK) {

@@ -1,6 +1,7 @@
 #include "printsphere/printer_plugin.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -184,6 +185,206 @@ PrintLifecycleState lifecycle_after_print_command(PrintCommand cmd) {
     default:
       return PrintLifecycleState::kUnknown;
   }
+}
+
+// Status-ring color/animation decision logic, moved here from ui.cpp so Ui
+// no longer needs to know about PrinterSnapshot/print-lifecycle at all for
+// this path — see PrinterPlugin::apply_ring_visual(). Pure functions, no
+// LVGL/Ui dependency; Ui::RingVisual/RingAnimKind are the shared, printer-
+// agnostic output type any plugin's own ring-driving logic would produce.
+constexpr uint32_t kRingBaseDark = 0x101010;
+
+RingVisual lifecycle_ring_visual(const PrinterSnapshot& snapshot, const ArcColorScheme& colors) {
+  const int progress = std::clamp(static_cast<int>(std::lround(snapshot.progress_percent)), 0, 100);
+  RingVisual visual = {};
+
+  // Filament load/unload animation — direction derived from resolver's ui_status.
+  if (snapshot.ui_status == "loading" || snapshot.ui_status == "unloading") {
+    visual.main_hex = kRingBaseDark;
+    visual.indicator_hex = colors.filament;
+    visual.anim_kind = (snapshot.ui_status == "loading") ? RingAnimKind::kFilamentLoad
+                                                         : RingAnimKind::kFilamentUnload;
+    return visual;
+  }
+
+  // Connection-level states (independent of print status).
+  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
+    visual.main_hex = colors.setup;
+    visual.indicator_hex = colors.setup;
+    return visual;
+  }
+  if (snapshot.connection == PrinterConnectionState::kError || snapshot.has_error ||
+      snapshot.lifecycle == PrintLifecycleState::kError) {
+    visual.main_hex = colors.error;
+    visual.indicator_hex = colors.error;
+    visual.anim_kind = RingAnimKind::kPulseBoth;
+    visual.pulse_base_hex = colors.error;
+    visual.pulse_period_ms = 1600U;
+    return visual;
+  }
+  if (!snapshot.wifi_connected) {
+    visual.main_hex = colors.offline;
+    visual.indicator_hex = colors.offline;
+    return visual;
+  }
+
+  // All remaining classifications come from the resolver (ui_status / lifecycle).
+  if (snapshot.ui_status == "done" || snapshot.lifecycle == PrintLifecycleState::kFinished) {
+    visual.main_hex = colors.done;
+    visual.indicator_hex = colors.done;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "downloading") {
+    visual.main_hex = kRingBaseDark;
+    visual.indicator_hex = colors.preheat;
+    visual.value_override = progress;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "preheating" || snapshot.ui_status == "preparing" ||
+      snapshot.lifecycle == PrintLifecycleState::kPreparing) {
+    visual.main_hex = colors.preheat;
+    visual.indicator_hex = colors.preheat;
+    visual.anim_kind = RingAnimKind::kPulseBoth;
+    visual.pulse_base_hex = colors.preheat;
+    visual.pulse_period_ms = 1400U;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "clean nozzle") {
+    visual.main_hex = colors.clean;
+    visual.indicator_hex = colors.clean;
+    visual.anim_kind = RingAnimKind::kPulseBoth;
+    visual.pulse_base_hex = colors.clean;
+    visual.pulse_period_ms = 1200U;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "bed level") {
+    visual.main_hex = colors.level;
+    visual.indicator_hex = colors.level;
+    visual.anim_kind = RingAnimKind::kPulseBoth;
+    visual.pulse_base_hex = colors.level;
+    visual.pulse_period_ms = 1400U;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "cooling") {
+    visual.main_hex = colors.cool;
+    visual.indicator_hex = colors.cool;
+    return visual;
+  }
+
+  if (snapshot.ui_status == "offline") {
+    visual.main_hex = colors.offline;
+    visual.indicator_hex = colors.offline;
+    return visual;
+  }
+
+  // Lifecycle-based fallback for states where ui_status is a free-form string.
+  switch (snapshot.lifecycle) {
+    case PrintLifecycleState::kPrinting:
+    case PrintLifecycleState::kPaused:
+      visual.main_hex = kRingBaseDark;
+      visual.indicator_hex = colors.printing;
+      return visual;
+    case PrintLifecycleState::kFinished:
+      visual.main_hex = colors.done;
+      visual.indicator_hex = colors.done;
+      return visual;
+    case PrintLifecycleState::kIdle:
+      if (snapshot.print_active) {
+        visual.main_hex = kRingBaseDark;
+        visual.indicator_hex = colors.idle_active;
+      } else {
+        visual.main_hex = colors.idle;
+        visual.indicator_hex = colors.idle;
+      }
+      return visual;
+    case PrintLifecycleState::kUnknown:
+    default:
+      break;
+  }
+
+  if (snapshot.connection == PrinterConnectionState::kBooting ||
+      snapshot.connection == PrinterConnectionState::kConnecting ||
+      snapshot.connection == PrinterConnectionState::kReadyForLanConnect) {
+    visual.main_hex = colors.setup;
+    visual.indicator_hex = colors.setup;
+    return visual;
+  }
+
+  visual.main_hex = colors.unknown;
+  visual.indicator_hex = colors.unknown;
+  return visual;
+}
+
+uint32_t stable_status_text_hex(const PrinterSnapshot& snapshot, const ArcColorScheme& colors) {
+  // Filament
+  if (snapshot.ui_status == "loading" || snapshot.ui_status == "unloading") {
+    return colors.filament;
+  }
+
+  // Connection-level states
+  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
+    return colors.setup;
+  }
+  if (snapshot.connection == PrinterConnectionState::kError || snapshot.has_error ||
+      snapshot.lifecycle == PrintLifecycleState::kError) {
+    return colors.error;
+  }
+  if (!snapshot.wifi_connected) {
+    return colors.offline;
+  }
+
+  // Resolver-classified states
+  if (snapshot.ui_status == "done" || snapshot.lifecycle == PrintLifecycleState::kFinished) {
+    return colors.done;
+  }
+  if (snapshot.ui_status == "downloading") {
+    return colors.preheat;
+  }
+  if (snapshot.ui_status == "preheating" || snapshot.ui_status == "preparing" ||
+      snapshot.lifecycle == PrintLifecycleState::kPreparing) {
+    return colors.preheat;
+  }
+  if (snapshot.ui_status == "clean nozzle") {
+    return colors.clean;
+  }
+  if (snapshot.ui_status == "bed level") {
+    return colors.level;
+  }
+  if (snapshot.ui_status == "cooling") {
+    return colors.cool;
+  }
+  if (snapshot.ui_status == "offline") {
+    return colors.offline;
+  }
+
+  // Lifecycle-based fallback
+  switch (snapshot.lifecycle) {
+    case PrintLifecycleState::kPrinting:
+    case PrintLifecycleState::kPaused:
+      return colors.printing;
+    case PrintLifecycleState::kPreparing:
+      return colors.preheat;
+    case PrintLifecycleState::kFinished:
+      return colors.done;
+    case PrintLifecycleState::kIdle:
+      return snapshot.print_active ? colors.idle_active : colors.idle;
+    case PrintLifecycleState::kUnknown:
+    default:
+      break;
+  }
+
+  if (snapshot.connection == PrinterConnectionState::kBooting ||
+      snapshot.connection == PrinterConnectionState::kConnecting ||
+      snapshot.connection == PrinterConnectionState::kReadyForLanConnect) {
+    return colors.setup;
+  }
+
+  return colors.unknown;
 }
 }  // namespace
 
@@ -645,6 +846,24 @@ void PrinterPlugin::tick(uint64_t now_ms) {
   latest_snapshot_ = std::move(snapshot);
 }
 
+void PrinterPlugin::apply_ring_visual() {
+  if (ui_ == nullptr) {
+    return;
+  }
+  // Nothing real to show yet — same guard Ui::set_arc_color_scheme used to
+  // apply before this logic moved here.
+  if (latest_snapshot_.ui_status.empty() && latest_snapshot_.stage.empty() &&
+      latest_snapshot_.detail.empty()) {
+    return;
+  }
+  const ArcColorScheme& colors = ui_->arc_color_scheme();
+  const RingVisual ring = lifecycle_ring_visual(latest_snapshot_, colors);
+  const uint32_t text_hex = stable_status_text_hex(latest_snapshot_, colors);
+  const int progress =
+      std::clamp(static_cast<int>(latest_snapshot_.progress_percent + 0.5f), 0, 100);
+  ui_->apply_ring_visual(ring, progress, text_hex);
+}
+
 void PrinterPlugin::update_ui() {
   // Store portal state first (lock-free), then apply_snapshot uses it inside
   // the same LVGL lock section — eliminates a separate lock acquisition.
@@ -654,6 +873,7 @@ void PrinterPlugin::update_ui() {
                                portal_access.pin_code, portal_access.pin_remaining_s,
                                portal_access.session_remaining_s);
   ui_->apply_snapshot(latest_snapshot_);
+  apply_ring_visual();
 }
 
 bool PrinterPlugin::wants_network() const {

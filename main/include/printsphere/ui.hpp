@@ -16,6 +16,30 @@
 
 namespace printsphere {
 
+// Generic description of what the shared status ring should show — printer-
+// agnostic on purpose. Ui::apply_ring_visual() just renders whatever it's
+// given; the decision of *what* to show (derived from PrinterSnapshot /
+// print lifecycle) lives in PrinterPlugin, not here. Any plugin whose page
+// is active could drive the ring the same way, reusing Ui's existing
+// lv_anim_t bookkeeping instead of reimplementing it.
+enum class RingAnimKind : uint8_t {
+  kNone,            // Static — no animation
+  kFilamentLoad,    // Arc value sweeps 0->100, repeat
+  kFilamentUnload,  // Arc value sweeps 100->0, repeat
+  kPulseBoth,       // Both MAIN & INDICATOR color pulse
+  kPulseIndicator,  // Only INDICATOR color pulses
+};
+
+struct RingVisual {
+  uint32_t main_hex = 0;
+  uint32_t indicator_hex = 0xFFFFFF;
+  int value_override = -1;
+  RingAnimKind anim_kind = RingAnimKind::kNone;
+  uint32_t pulse_base_hex = 0;
+  uint32_t pulse_period_ms = 0;
+  bool animated() const { return anim_kind != RingAnimKind::kNone; }
+};
+
 class Ui {
  public:
   // Page layout (left → right):
@@ -37,6 +61,8 @@ class Ui {
   void set_display_tilt_deci_deg(int deci_deg);
   esp_err_t initialize();
   void set_arc_color_scheme(const ArcColorScheme& colors);
+  const ArcColorScheme& arc_color_scheme() const { return arc_colors_; }
+  void apply_ring_visual(const RingVisual& ring, int progress_value, uint32_t text_hex);
   void apply_snapshot(const PrinterSnapshot& snapshot);
   // keep_awake: hard wake-lock (provisioning / camera page / page transition) —
   //             blocks both dimming and screen-off.
@@ -114,7 +140,7 @@ class Ui {
   void register_page_slots();
 
   esp_err_t build_dashboard();
-  void apply_ring_visual_locked(const PrinterSnapshot& snapshot);
+  void apply_ring_visual_locked(const RingVisual& ring, int progress_value, uint32_t text_hex);
   void apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,
                              std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw = nullptr,
                              const lv_image_dsc_t* pre_decoded_dsc = nullptr);

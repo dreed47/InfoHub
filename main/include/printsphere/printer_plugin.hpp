@@ -39,6 +39,12 @@ class PrinterPlugin : public Plugin {
   void tick(uint64_t now_ms) override;
   void update_ui() override;
 
+  // Computes the status ring's visual (color/animation) from the latest
+  // snapshot and pushes it to Ui::apply_ring_visual(). Called from
+  // update_ui() every tick, and also from the arc-color live-preview portal
+  // handler for instant feedback when tuning colors in Web Config.
+  void apply_ring_visual();
+
   bool wants_network() const override;
   bool wants_awake() const override;
   uint32_t desired_poll_interval_ms() const override;
