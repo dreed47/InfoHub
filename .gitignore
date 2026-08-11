@@ -8,6 +8,7 @@ __pycache__/
 Official-hardware-examples/
 .vscode/
 tools/*
+!tools/dev.sh
 !tools/patches/
 !tools/patches/*.ps1
 !tools/package_initial_flash.py
