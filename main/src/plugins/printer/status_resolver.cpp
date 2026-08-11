@@ -1,4 +1,4 @@
-#include "printsphere/status_resolver.hpp"
+#include "printsphere/plugins/printer/status_resolver.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -6,7 +6,7 @@
 #include <string>
 
 #include "printsphere/bambu_status.hpp"
-#include "printsphere/error_lookup.hpp"
+#include "printsphere/plugins/printer/error_lookup.hpp"
 
 namespace printsphere {
 

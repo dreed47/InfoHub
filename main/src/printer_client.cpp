@@ -12,8 +12,8 @@
 
 #include "cJSON.h"
 #include "printsphere/bambu_status.hpp"
-#include "printsphere/error_lookup.hpp"
-#include "printsphere/status_resolver.hpp"
+#include "printsphere/plugins/printer/error_lookup.hpp"
+#include "printsphere/plugins/printer/status_resolver.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"

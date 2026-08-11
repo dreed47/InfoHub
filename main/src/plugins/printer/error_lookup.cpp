@@ -1,4 +1,4 @@
-#include "printsphere/error_lookup.hpp"
+#include "printsphere/plugins/printer/error_lookup.hpp"
 
 #include <cstdio>
 #include <cstring>

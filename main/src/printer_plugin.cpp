@@ -13,7 +13,8 @@
 #include "printsphere/config_store.hpp"
 #include "printsphere/pmu.hpp"
 #include "printsphere/setup_portal.hpp"
-#include "printsphere/status_resolver.hpp"
+#include "printsphere/plugins/printer/error_lookup.hpp"
+#include "printsphere/plugins/printer/status_resolver.hpp"
 #include "printsphere/ui.hpp"
 #include "printsphere/wifi_manager.hpp"
 
@@ -208,6 +209,10 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
 
   filament_wake_enabled_ = ctx.config_store.load_filament_wake_enabled();
   filament_anim_enabled_ = ctx.config_store.load_filament_anim_enabled();
+
+  if (!initialize_error_lookup_storage()) {
+    ESP_LOGW(kTag, "Embedded error lookup unavailable; falling back to generic error text");
+  }
   return ESP_OK;
 }
 

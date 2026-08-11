@@ -13,7 +13,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "printsphere/error_lookup.hpp"
 #include "printsphere/time_sync.hpp"
 
 #if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
@@ -166,9 +165,6 @@ void Application::run() {
     ESP_LOGW(kTag, "Audio notifier init failed - sound disabled this boot");
   }
   ESP_ERROR_CHECK(ui_.initialize());
-  if (!initialize_error_lookup_storage()) {
-    ESP_LOGW(kTag, "Embedded error lookup unavailable; falling back to generic error text");
-  }
 
   PluginContext plugin_ctx{config_store_, wifi_manager_,   ui_,
                            setup_portal_,  pmu_manager_,    audio_notifier_};

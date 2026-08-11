@@ -43,7 +43,7 @@ idf_component_register(
         "src/bambu_status.cpp"
         "src/bambu_cloud_client.cpp"
         "src/config_store.cpp"
-        "src/error_lookup.cpp"
+        "src/plugins/printer/error_lookup.cpp"
         "src/network_arbiter.cpp"
         "src/plugin_registry.cpp"
         "src/printer_plugin.cpp"
@@ -60,7 +60,7 @@ idf_component_register(
         "src/debug_log_buffer.cpp"
         "src/setup_portal.cpp"
         "src/serial_provisioner.cpp"
-        "src/status_resolver.cpp"
+        "src/plugins/printer/status_resolver.cpp"
         "src/time_sync.cpp"
         "src/ui.cpp"
         "src/ui_shell.cpp"
@@ -68,11 +68,16 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     EMBED_TXTFILES
-        "include/certs/bambu.cert"
-        "include/certs/bambu_p2s_250626.cert"
-        "include/certs/bambu_h2c_251122.cert"
-        "include/certs/bambu_x2c_260425.cert"
-        "include/error_lookup/error_lookup.tsv"
+        # Printer-plugin trust material + error-lookup table. Unconditional
+        # for now — the printer plugin isn't actually optional yet (no
+        # Kconfig toggle exists), so there's nothing to gate this behind.
+        # See the "AudioNotifier and error_lookup changes sketch" in
+        # CLAUDE.md for when that changes.
+        "include/printsphere/plugins/printer/bambu.cert"
+        "include/printsphere/plugins/printer/bambu_p2s_250626.cert"
+        "include/printsphere/plugins/printer/bambu_h2c_251122.cert"
+        "include/printsphere/plugins/printer/bambu_x2c_260425.cert"
+        "include/printsphere/plugins/printer/error_lookup.tsv"
     REQUIRES
         ${PRINTSPHERE_MAIN_REQUIRES}
     PRIV_REQUIRES
