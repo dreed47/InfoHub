@@ -140,6 +140,10 @@ std::string trim_copy(const std::string& input) {
   return input.substr(start, end - start);
 }
 
+uint64_t now_ms() {
+  return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+}
+
 namespace {
 
 WifiCredentials merge_wifi_credentials(WifiCredentials submitted,
@@ -177,10 +181,6 @@ bool parse_html_color(const std::string& input, uint32_t* color) {
 
   *color = static_cast<uint32_t>(std::strtoul(normalized.c_str(), nullptr, 16));
   return true;
-}
-
-uint64_t now_ms() {
-  return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
 }
 
 uint32_t remaining_seconds(uint64_t expiry_ms, uint64_t current_ms) {
@@ -582,8 +582,6 @@ void append_local_status_fields(std::string* body, const PrinterSnapshot& local,
   *body += ",\"local_detail\":\"" + json_escape(local.detail) + "\"";
 }
 
-namespace {
-
 // Reconnect-storm telemetry — see MqttTelemetry. Emitted with stable JSON keys
 // (mqtt_local_*, mqtt_cloud_*) so the setup-portal status page can render a
 // "last attempt N s ago, M failures" line without polling internal log files.
@@ -629,8 +627,6 @@ void append_mqtt_telemetry_fields(std::string* body, const MqttTelemetry& local,
   append("mqtt_local", local);
   append("mqtt_cloud", cloud);
 }
-
-}  // namespace
 
 void SetupPortal::request_unlock_pin() {
   const uint64_t current_ms = now_ms();
@@ -725,22 +721,7 @@ bool SetupPortal::is_provisioning_complete() const {
   if (wifi_manager_.is_setup_access_point_active() || !wifi_manager_.is_station_connected()) {
     return false;
   }
-
-  const SourceMode source_mode = config_store_.load_source_mode();
-  const PrinterSnapshot local = printer_client_.snapshot();
-  const BambuCloudSnapshot cloud = cloud_client_.snapshot();
-  const bool local_connected = local.connection == PrinterConnectionState::kOnline;
-  const bool cloud_connected = cloud_portal_ready(cloud);
-
-  switch (source_mode) {
-    case SourceMode::kCloudOnly:
-      return cloud_connected;
-    case SourceMode::kLocalOnly:
-      return local_connected;
-    case SourceMode::kHybrid:
-    default:
-      return cloud_connected || local_connected;
-  }
+  return printer_plugin_.is_provisioning_satisfied();
 }
 
 void SetupPortal::prune_access_state_locked(uint64_t current_ms) {
@@ -895,7 +876,6 @@ esp_err_t SetupPortal::start(const std::array<Plugin*, kMaxPlugins>& plugins) {
       {"/api/wifi/scan", HTTP_GET, &SetupPortal::handle_wifi_scan},
       {"/api/config", HTTP_GET, &SetupPortal::handle_config_get},
       {"/api/config", HTTP_POST, &SetupPortal::handle_config_post},
-      {"/api/plugins/printer/config", HTTP_GET, &SetupPortal::handle_plugin_printer_config_get},
       {"/api/display-rotation", HTTP_POST, &SetupPortal::handle_display_rotation_post},
       {"/api/battery-display", HTTP_POST, &SetupPortal::handle_battery_display_post},
       {"/api/portal-access", HTTP_POST, &SetupPortal::handle_portal_access_post},
@@ -963,10 +943,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const PrinterConnection printer = active_profile.to_connection();
   const ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
   const CloudPortalPresentation cloud_portal =
-      cloud_portal_presentation(portal->cloud_client_.refreshed_snapshot());
+      cloud_portal_presentation(portal->printer_plugin_.cloud_refreshed_snapshot());
   const BambuCloudSnapshot& cloud_snapshot = cloud_portal.snapshot;
-  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
-  const auto all_cloud_devices = portal->cloud_client_.get_cloud_devices();
+  const PrinterSnapshot local_snapshot = portal->printer_plugin_.local_snapshot();
+  const auto all_cloud_devices = portal->printer_plugin_.cloud_devices();
   const auto all_profiles = portal->config_store_.load_printer_profiles();
   const std::string effective_printer_serial = [&]() -> std::string {
     if (!printer.serial.empty()) return printer.serial;
@@ -986,7 +966,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const bool cloud_password_saved = !cloud.password.empty();
   const bool printer_access_code_saved = !printer.access_code.empty();
   const std::string wifi_ip = portal->wifi_manager_.station_ip();
-  const bool local_configured = portal->printer_client_.is_configured();
+  const bool local_configured = portal->printer_plugin_.local_configured();
   const bool show_connection_steps = wifi_connected && !setup_ap_active;
   const std::string wifi_password_placeholder =
       wifi_password_saved ? "Leave empty to keep saved Wi-Fi password" : "Enter Wi-Fi password";
@@ -1892,7 +1872,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
 
     const auto profiles = portal->config_store_.load_printer_profiles();
     const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-    const auto cloud_devices = portal->cloud_client_.get_cloud_devices();
+    const auto cloud_devices = portal->printer_plugin_.cloud_devices();
     const std::string printer_count_str = std::to_string(profiles.size());
     const char* printer_badge_class = profiles.empty() ? "idle" : "ok";
     begin_settings_panel(
@@ -2040,6 +2020,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
         "Weather",
         "WeatherFlow Tempest station via WeatherFlow's cloud API. Enter your station ID and personal API token below.",
         "Setup", "idle", false, "weather-section-pill");
+    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"weather_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
     html += "<div class=\"grid-2\">";
     html += "<div class=\"field\"><label for=\"weather_station_id\">Station ID</label><input id=\"weather_station_id\" value=\"\" autocomplete=\"off\"></div>";
     html += "<div class=\"field\"><label for=\"weather_api_token\">API Token</label><input id=\"weather_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved token\" autocomplete=\"off\"></div>";
@@ -2751,6 +2732,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(idInput)idInput.value=body.station_id||'';"
           "const pollInput=document.getElementById('weather_poll_s');"
           "if(pollInput)pollInput.value=body.poll_s||300;"
+          "const enabledInput=document.getElementById('weather_enabled');"
+          "if(enabledInput)enabledInput.checked=body.enabled!==false;"
           "weatherStationLoaded=true;}"
           "setBadge('weather-badge','Weather',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
           "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
@@ -2768,7 +2751,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
           "station_id:document.getElementById('weather_station_id').value.trim(),"
           "api_token:document.getElementById('weather_api_token').value,"
-          "poll_s:document.getElementById('weather_poll_s').value})});"
+          "poll_s:document.getElementById('weather_poll_s').value,"
+          "enabled:document.getElementById('weather_enabled').checked})});"
           "document.getElementById('weather_api_token').value='';"
           "await loadWeatherStatus();}"
           "catch(error){}finally{weatherSaveButton.disabled=false;}});}";
@@ -3032,12 +3016,12 @@ esp_err_t SetupPortal::handle_health(httpd_req_t* request) {
     body += (portal->wifi_manager_.is_station_connected() ? "true" : "false");
     body += ",";
     body += "\"wifi_ip\":\"" + json_escape(portal->wifi_manager_.station_ip()) + "\"";
-    const BambuCloudSnapshot cloud = portal->cloud_client_.refreshed_snapshot();
-    const PrinterSnapshot local = portal->printer_client_.snapshot();
+    const BambuCloudSnapshot cloud = portal->printer_plugin_.cloud_refreshed_snapshot();
+    const PrinterSnapshot local = portal->printer_plugin_.local_snapshot();
     append_cloud_status_fields(&body, cloud);
-    append_local_status_fields(&body, local, portal->printer_client_.is_configured());
-    append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
-                                 portal->cloud_client_.mqtt_telemetry());
+    append_local_status_fields(&body, local, portal->printer_plugin_.local_configured());
+    append_mqtt_telemetry_fields(&body, portal->printer_plugin_.local_mqtt_telemetry(),
+                                 portal->printer_plugin_.cloud_mqtt_telemetry());
   }
   body += "}";
 
@@ -3243,55 +3227,6 @@ esp_err_t SetupPortal::handle_config_get(httpd_req_t* request) {
 // /api/source-mode, /api/printers/*), each with its own validation and
 // its own live-reconnect (no shared/cross-plugin state, no reboot needed
 // since these clients support live reconfigure). No POST needed here.
-esp_err_t SetupPortal::handle_plugin_printer_config_get(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) {
-    return ESP_FAIL;
-  }
-  if (!portal->is_request_authorized(request)) {
-    return portal->send_locked_response(request);
-  }
-
-  const BambuCloudCredentials cloud = portal->config_store_.load_cloud_credentials();
-  const SourceMode source_mode = portal->config_store_.load_source_mode();
-  const PrinterConnection printer = portal->config_store_.load_active_printer_profile().to_connection();
-  const BambuCloudSnapshot cloud_snapshot = portal->cloud_client_.snapshot();
-  const std::string effective_printer_serial = [&]() -> std::string {
-    if (!printer.serial.empty()) return printer.serial;
-    const auto cloud_devs = portal->cloud_client_.get_cloud_devices();
-    const auto profiles = portal->config_store_.load_printer_profiles();
-    for (const auto& cd : cloud_devs) {
-      bool has_local = false;
-      for (const auto& p : profiles) {
-        if (p.serial == cd.serial && p.has_local_config()) { has_local = true; break; }
-      }
-      if (!has_local) return cd.serial;
-    }
-    return cloud_snapshot.resolved_serial;
-  }();
-
-  std::string body = "{";
-  body += "\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
-  body += "\"cloud_region\":\"" + json_escape(to_string(cloud.region)) + "\",";
-  body += "\"printer_host\":\"" + json_escape(printer.host) + "\",";
-  body += "\"printer_serial\":\"" + json_escape(effective_printer_serial) + "\",";
-  body += "\"source_mode\":\"";
-  body += to_string(source_mode);
-  body += "\",";
-  body += "\"state_source\":\"";
-  body += to_string(source_mode);
-  body += "\"";
-  const PrinterSnapshot local_snapshot = portal->printer_client_.snapshot();
-  append_cloud_status_fields(&body, cloud_snapshot);
-  append_local_status_fields(&body, local_snapshot, portal->printer_client_.is_configured());
-  append_mqtt_telemetry_fields(&body, portal->printer_client_.mqtt_telemetry(),
-                               portal->cloud_client_.mqtt_telemetry());
-  body += "}";
-
-  send_json(request, body);
-  return ESP_OK;
-}
-
 esp_err_t SetupPortal::handle_config_post(httpd_req_t* request) {
   auto* portal = static_cast<SetupPortal*>(request->user_ctx);
   if (portal == nullptr) {

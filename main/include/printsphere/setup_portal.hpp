@@ -8,12 +8,10 @@
 #include "esp_err.h"
 #include "esp_http_server.h"
 #include "printsphere/audio_notifier.hpp"
-#include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
-#include "printsphere/p1s_camera_client.hpp"
 #include "printsphere/plugin.hpp"
-#include "printsphere/printer_client.hpp"
 #include "printsphere/pmu.hpp"
+#include "printsphere/printer_plugin.hpp"
 #include "printsphere/wifi_manager.hpp"
 
 namespace printsphere {
@@ -35,14 +33,11 @@ struct PortalAccessSnapshot {
 class SetupPortal {
  public:
   SetupPortal(ConfigStore& config_store, const WifiManager& wifi_manager,
-              BambuCloudClient& cloud_client, PrinterClient& printer_client,
-              P1sCameraClient& camera_client, Ui& ui, const PmuManager& pmu_manager,
+              PrinterPlugin& printer_plugin, Ui& ui, const PmuManager& pmu_manager,
               AudioNotifier& audio_notifier)
       : config_store_(config_store),
         wifi_manager_(wifi_manager),
-        cloud_client_(cloud_client),
-        printer_client_(printer_client),
-        camera_client_(camera_client),
+        printer_plugin_(printer_plugin),
         ui_(ui),
         pmu_manager_(pmu_manager),
         audio_notifier_(audio_notifier) {}
@@ -66,7 +61,6 @@ class SetupPortal {
   static esp_err_t handle_wifi_scan(httpd_req_t* request);
   static esp_err_t handle_config_get(httpd_req_t* request);
   static esp_err_t handle_config_post(httpd_req_t* request);
-  static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
   static esp_err_t handle_display_rotation_post(httpd_req_t* request);
   static esp_err_t handle_battery_display_post(httpd_req_t* request);
   static esp_err_t handle_portal_access_post(httpd_req_t* request);
@@ -94,9 +88,7 @@ class SetupPortal {
 
   ConfigStore& config_store_;
   const WifiManager& wifi_manager_;
-  BambuCloudClient& cloud_client_;
-  PrinterClient& printer_client_;
-  P1sCameraClient& camera_client_;
+  PrinterPlugin& printer_plugin_;
   Ui& ui_;
   const PmuManager& pmu_manager_;
   AudioNotifier& audio_notifier_;

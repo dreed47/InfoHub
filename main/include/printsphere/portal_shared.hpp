@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "cJSON.h"
@@ -7,6 +8,7 @@
 #include "esp_http_server.h"
 #include "printsphere/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
+#include "printsphere/mqtt_telemetry.hpp"
 
 namespace printsphere {
 
@@ -32,5 +34,11 @@ bool cloud_detail_is_transitional(const std::string& detail);
 void append_cloud_status_fields(std::string* body, const BambuCloudSnapshot& cloud);
 void append_local_status_fields(std::string* body, const PrinterSnapshot& local,
                                  bool local_configured);
+void append_mqtt_telemetry_fields(std::string* body, const MqttTelemetry& local,
+                                   const MqttTelemetry& cloud);
+
+// Millisecond monotonic clock, shared between SetupPortal's own handlers and
+// plugin-owned ones (e.g. append_mqtt_telemetry_fields' seconds-ago math).
+uint64_t now_ms();
 
 }  // namespace printsphere

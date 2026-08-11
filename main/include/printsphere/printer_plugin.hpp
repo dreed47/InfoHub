@@ -69,6 +69,22 @@ class PrinterPlugin : public Plugin {
   PrinterClient& printer_client() { return printer_client_; }
   P1sCameraClient& camera_client() { return camera_client_; }
 
+  // Phase 7: thin forwarding accessors so SetupPortal's read-only status/
+  // telemetry display code can go through PrinterPlugin instead of holding
+  // its own BambuCloudClient&/PrinterClient& refs. Same data, just fetched
+  // through the plugin that actually owns the clients.
+  PrinterSnapshot local_snapshot() const { return printer_client_.snapshot(); }
+  bool local_configured() const { return printer_client_.is_configured(); }
+  BambuCloudSnapshot cloud_snapshot() const { return cloud_client_.snapshot(); }
+  BambuCloudSnapshot cloud_refreshed_snapshot() { return cloud_client_.refreshed_snapshot(); }
+  std::vector<CloudDeviceInfo> cloud_devices() const { return cloud_client_.get_cloud_devices(); }
+  MqttTelemetry local_mqtt_telemetry() const { return printer_client_.mqtt_telemetry(); }
+  MqttTelemetry cloud_mqtt_telemetry() const { return cloud_client_.mqtt_telemetry(); }
+  // Source-mode-aware "is the printer side of provisioning satisfied" check,
+  // moved here from SetupPortal::is_provisioning_complete() (which still
+  // handles the Wi-Fi-level checks itself — those are genuinely core).
+  bool is_provisioning_satisfied() const;
+
  private:
   // Phase 8d: portal routes moved here from SetupPortal (printer_plugin_portal.cpp).
   // Same handler shape as SetupPortal's — static + httpd_req_t::user_ctx — just
@@ -86,6 +102,9 @@ class PrinterPlugin : public Plugin {
   static esp_err_t handle_printers_save(httpd_req_t* request);
   static esp_err_t handle_printers_delete(httpd_req_t* request);
   static esp_err_t handle_printers_clear_local(httpd_req_t* request);
+  // Phase 7: was left behind in SetupPortal during 8d despite already being
+  // registered at the plugin-owned /api/plugins/printer/config path.
+  static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
 
   // Phase 6a: page0 (printer-selector) card management, moved here from Ui
   // (see CLAUDE.md's "Ui changes sketch" / the Phase 6a plan). Ui only owns

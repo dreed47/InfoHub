@@ -80,6 +80,19 @@ class Plugin {
   // struct declared in ConfigStore itself.
   virtual void load_config() = 0;
   virtual void save_config() = 0;
+
+  // Runtime enable/disable (Phase 7), independent of the Kconfig toggle that
+  // controls whether a plugin is compiled in at all. Concrete, not virtual —
+  // every plugin gets this for free. Application's tick()/update_ui()/
+  // poll-interval loops skip a plugin while disabled; init() and
+  // build_screen() still run unconditionally (objects/tasks built eagerly
+  // either way, same pattern as AMS pages). Defaults to true so a plugin with
+  // no portal toggle (e.g. PrinterPlugin today) behaves exactly as before.
+  bool enabled() const { return enabled_; }
+  void set_enabled(bool enabled) { enabled_ = enabled; }
+
+ protected:
+  bool enabled_ = true;
 };
 
 }  // namespace printsphere

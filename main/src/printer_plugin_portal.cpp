@@ -880,6 +880,55 @@ esp_err_t PrinterPlugin::handle_printers_clear_local(httpd_req_t* request) {
   return ESP_OK;
 }
 
+esp_err_t PrinterPlugin::handle_plugin_printer_config_get(httpd_req_t* request) {
+  auto* plugin = static_cast<PrinterPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  const BambuCloudCredentials cloud = plugin->config_store_->load_cloud_credentials();
+  const SourceMode source_mode = plugin->config_store_->load_source_mode();
+  const PrinterConnection printer =
+      plugin->config_store_->load_active_printer_profile().to_connection();
+  const BambuCloudSnapshot cloud_snapshot = plugin->cloud_snapshot();
+  const std::string effective_printer_serial = [&]() -> std::string {
+    if (!printer.serial.empty()) return printer.serial;
+    const auto cloud_devs = plugin->cloud_devices();
+    const auto profiles = plugin->config_store_->load_printer_profiles();
+    for (const auto& cd : cloud_devs) {
+      bool has_local = false;
+      for (const auto& p : profiles) {
+        if (p.serial == cd.serial && p.has_local_config()) { has_local = true; break; }
+      }
+      if (!has_local) return cd.serial;
+    }
+    return cloud_snapshot.resolved_serial;
+  }();
+
+  std::string body = "{";
+  body += "\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
+  body += "\"cloud_region\":\"" + json_escape(to_string(cloud.region)) + "\",";
+  body += "\"printer_host\":\"" + json_escape(printer.host) + "\",";
+  body += "\"printer_serial\":\"" + json_escape(effective_printer_serial) + "\",";
+  body += "\"source_mode\":\"";
+  body += to_string(source_mode);
+  body += "\",";
+  body += "\"state_source\":\"";
+  body += to_string(source_mode);
+  body += "\"";
+  const PrinterSnapshot local_snapshot = plugin->local_snapshot();
+  append_cloud_status_fields(&body, cloud_snapshot);
+  append_local_status_fields(&body, local_snapshot, plugin->local_configured());
+  append_mqtt_telemetry_fields(&body, plugin->local_mqtt_telemetry(), plugin->cloud_mqtt_telemetry());
+  body += "}";
+
+  send_json(request, body);
+  return ESP_OK;
+}
+
 void PrinterPlugin::register_portal_routes(httpd_handle_t server) {
   struct RouteEntry {
     const char* uri;
@@ -899,6 +948,7 @@ void PrinterPlugin::register_portal_routes(httpd_handle_t server) {
       {"/api/printers/save", HTTP_POST, &PrinterPlugin::handle_printers_save},
       {"/api/printers/delete", HTTP_POST, &PrinterPlugin::handle_printers_delete},
       {"/api/printers/clear-local", HTTP_POST, &PrinterPlugin::handle_printers_clear_local},
+      {"/api/plugins/printer/config", HTTP_GET, &PrinterPlugin::handle_plugin_printer_config_get},
   };
 
   for (const RouteEntry& route : kRoutes) {

@@ -16,6 +16,7 @@
 #include "printsphere/setup_portal.hpp"
 #include "printsphere/plugins/printer/error_lookup.hpp"
 #include "printsphere/plugins/printer/status_resolver.hpp"
+#include "printsphere/portal_shared.hpp"
 #include "printsphere/ui.hpp"
 #include "printsphere/ui_toolkit.hpp"
 #include "printsphere/wifi_manager.hpp"
@@ -711,6 +712,23 @@ void PrinterPlugin::replay_card_animations_locked() {
     lv_anim_start(&ro);
 
     ++card_idx;
+  }
+}
+
+bool PrinterPlugin::is_provisioning_satisfied() const {
+  const SourceMode source_mode = config_store_->load_source_mode();
+  const bool local_connected =
+      printer_client_.snapshot().connection == PrinterConnectionState::kOnline;
+  const bool cloud_connected = cloud_portal_ready(cloud_client_.snapshot());
+
+  switch (source_mode) {
+    case SourceMode::kCloudOnly:
+      return cloud_connected;
+    case SourceMode::kLocalOnly:
+      return local_connected;
+    case SourceMode::kHybrid:
+    default:
+      return cloud_connected || local_connected;
   }
 }
 

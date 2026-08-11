@@ -58,6 +58,8 @@ void WeatherPlugin::load_config() {
     poll_interval_s = static_cast<uint32_t>(std::strtoul(poll_s_str.c_str(), nullptr, 10));
   }
   client_.configure(station_id, api_token, poll_interval_s);
+
+  set_enabled(config_store_->load_plugin_string(kPluginNs, "enabled") != "0");
 }
 
 void WeatherPlugin::tick(uint64_t) {

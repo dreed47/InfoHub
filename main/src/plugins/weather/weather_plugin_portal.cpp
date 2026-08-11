@@ -10,6 +10,7 @@
 #include "printsphere/config_store.hpp"
 #include "printsphere/portal_shared.hpp"
 #include "printsphere/setup_portal.hpp"
+#include "printsphere/ui.hpp"
 
 namespace printsphere {
 
@@ -41,6 +42,8 @@ esp_err_t WeatherPlugin::handle_config_get(httpd_req_t* request) {
   body += json_escape(station_id);
   body += "\",\"poll_s\":";
   body += poll_s_str.empty() ? "300" : poll_s_str;
+  body += ",\"enabled\":";
+  body += plugin->enabled() ? "true" : "false";
   body += ",\"configured\":";
   body += snapshot.configured ? "true" : "false";
   body += ",\"last_fetch_ok\":";
@@ -86,6 +89,7 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   const std::string submitted_station_id = trim_copy(read_string_field(root, "station_id"));
   const std::string submitted_api_token = read_string_field(root, "api_token");
   const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
+  const bool enabled = read_bool_field(root, "enabled", plugin->enabled());
   cJSON_Delete(root);
 
   const std::string stored_api_token =
@@ -103,8 +107,16 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   plugin->config_store_->save_plugin_string(kPluginNs, "station_id", submitted_station_id);
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
   plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
+  plugin->config_store_->save_plugin_string(kPluginNs, "enabled", enabled ? "1" : "0");
 
   plugin->client_.configure(submitted_station_id, api_token, poll_interval_s);
+  plugin->set_enabled(enabled);
+  if (!enabled && plugin->ui_ != nullptr) {
+    // Application's update_ui() loop skips disabled plugins, so the pager
+    // wouldn't otherwise notice the page should stop being offered — hide it
+    // immediately rather than leaving it enabled at its last-known state.
+    plugin->ui_->set_plugin_page_enabled(false);
+  }
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;

@@ -75,9 +75,8 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 }  // namespace
 
 Application::Application()
-    : setup_portal_(config_store_, wifi_manager_, printer_plugin_.cloud_client(),
-                    printer_plugin_.printer_client(), printer_plugin_.camera_client(), ui_,
-                    pmu_manager_, audio_notifier_),
+    : setup_portal_(config_store_, wifi_manager_, printer_plugin_, ui_, pmu_manager_,
+                    audio_notifier_),
       serial_provisioner_(config_store_, wifi_manager_) {
   printer_plugin_.cloud_client().set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
@@ -194,13 +193,13 @@ void Application::run() {
     }
 
     for (Plugin* plugin : plugins_) {
-      if (plugin == nullptr) {
+      if (plugin == nullptr || !plugin->enabled()) {
         continue;
       }
       plugin->tick(now_ms);
     }
     for (Plugin* plugin : plugins_) {
-      if (plugin == nullptr) {
+      if (plugin == nullptr || !plugin->enabled()) {
         continue;
       }
       plugin->update_ui();
@@ -208,7 +207,7 @@ void Application::run() {
 
     uint32_t min_poll_interval_ms = 1500;
     for (Plugin* plugin : plugins_) {
-      if (plugin == nullptr) {
+      if (plugin == nullptr || !plugin->enabled()) {
         continue;
       }
       min_poll_interval_ms = std::min(min_poll_interval_ms, plugin->desired_poll_interval_ms());
