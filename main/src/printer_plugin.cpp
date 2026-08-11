@@ -17,7 +17,24 @@
 #include "printsphere/plugins/printer/error_lookup.hpp"
 #include "printsphere/plugins/printer/status_resolver.hpp"
 #include "printsphere/ui.hpp"
+#include "printsphere/ui_toolkit.hpp"
 #include "printsphere/wifi_manager.hpp"
+
+#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#include "bsp/esp32_s3_touch_amoled_1_75.h"
+#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#include "bsp/esp32_s3_touch_lcd_2_8c.h"
+#else
+#error "Unknown PrintSphere hardware variant"
+#endif
+
+// Font global, declared the same way ui.cpp/weather_plugin.cpp do: extern
+// "C", at file scope (a namespaced extern here would create a mismatched
+// mangled symbol against the plain-C font object).
+extern "C" {
+extern const lv_font_t dosis_20;
+extern const lv_font_t dosis_32;
+}
 
 namespace printsphere {
 
@@ -386,6 +403,28 @@ uint32_t stable_status_text_hex(const PrinterSnapshot& snapshot, const ArcColorS
 
   return colors.unknown;
 }
+
+// Page0 (printer-selector) card widgets, moved here from ui.cpp — see
+// PrinterPlugin::build_screen()/update_printer_cards(). Pure LVGL helpers,
+// zero adaptation needed beyond the move itself.
+constexpr uint32_t kCardRevealDurationMs = 300U;
+constexpr int32_t kCardRevealYStart = 28;
+constexpr uint32_t kCardRevealStaggerMs = 55U;
+
+// Micro-interaction: uniform scale on card tap (256 = 100% in LVGL 9)
+void card_scale_exec_cb(void* obj, int32_t val) {
+  lv_obj_set_style_transform_scale(static_cast<lv_obj_t*>(obj), val, 0);
+}
+
+// Cascading reveal: vertical slide-in per card
+void card_reveal_y_exec_cb(void* obj, int32_t val) {
+  lv_obj_set_style_translate_y(static_cast<lv_obj_t*>(obj), val, 0);
+}
+
+// Cascading reveal: fade-in per card
+void card_reveal_opa_exec_cb(void* obj, int32_t val) {
+  lv_obj_set_style_opa(static_cast<lv_obj_t*>(obj), static_cast<lv_opa_t>(val), 0);
+}
 }  // namespace
 
 esp_err_t PrinterPlugin::init(PluginContext& ctx) {
@@ -417,9 +456,267 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   return ESP_OK;
 }
 
+void PrinterPlugin::build_screen(lv_obj_t* parent) {
+  title_ = lv_label_create(parent);
+  set_label_text_if_changed(title_, "Printers");
+  lv_obj_set_width(title_, 320);
+  lv_label_set_long_mode(title_, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(title_, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(title_, &dosis_32, 0);
+  lv_obj_set_style_text_color(title_, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_align(title_, LV_ALIGN_TOP_MID, 0, 60);
+
+  card_list_ = lv_obj_create(parent);
+  lv_obj_set_size(card_list_, 380, 300);
+  lv_obj_align(card_list_, LV_ALIGN_CENTER, 0, 20);
+  make_transparent(card_list_);
+  lv_obj_set_flex_flow(card_list_, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(card_list_, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_style_pad_row(card_list_, 10, 0);
+  lv_obj_set_style_pad_all(card_list_, 0, 0);
+  lv_obj_set_scroll_dir(card_list_, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(card_list_, LV_SCROLLBAR_MODE_OFF);
+
+  empty_note_ = lv_label_create(parent);
+  set_label_text_if_changed(empty_note_, "No printers configured.\nUse the web portal to add printers.");
+  lv_obj_set_width(empty_note_, 320);
+  lv_label_set_long_mode(empty_note_, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(empty_note_, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(empty_note_, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(empty_note_, lv_color_hex(0x666666), 0);
+  lv_obj_align(empty_note_, LV_ALIGN_CENTER, 0, 20);
+  lv_obj_add_flag(empty_note_, LV_OBJ_FLAG_HIDDEN);
+
+  ui_->register_page0_fade_targets(title_, card_list_, empty_note_);
+  ui_->register_page0_reentry_callback(&PrinterPlugin::replay_card_animations_trampoline, this);
+}
+
+void PrinterPlugin::replay_card_animations_trampoline(void* user_data) {
+  static_cast<PrinterPlugin*>(user_data)->replay_card_animations_locked();
+}
+
+void PrinterPlugin::printer_card_click_cb(lv_event_t* event) {
+  auto* self = static_cast<PrinterPlugin*>(lv_event_get_user_data(event));
+  lv_obj_t* target = static_cast<lv_obj_t*>(lv_event_get_target(event));
+  for (const auto& cw : self->page0_cards_) {
+    if (cw.card == target) {
+      self->pending_printer_switch_ = cw.profile_index;
+      self->ui_->request_wake_display();
+
+      // Micro-interaction: quick scale bounce (100% → 91% → 100%)
+      lv_anim_t sa;
+      lv_anim_init(&sa);
+      lv_anim_set_var(&sa, target);
+      lv_anim_set_exec_cb(&sa, card_scale_exec_cb);
+      lv_anim_set_values(&sa, 256, 233);
+      lv_anim_set_duration(&sa, 75);
+      lv_anim_set_reverse_duration(&sa, 110);
+      lv_anim_set_path_cb(&sa, lv_anim_path_ease_out);
+      lv_anim_start(&sa);
+      break;
+    }
+  }
+}
+
+int PrinterPlugin::consume_printer_switch_request() {
+  int val = pending_printer_switch_;
+  pending_printer_switch_ = -1;
+  return val;
+}
+
+void PrinterPlugin::update_printer_cards(const std::vector<PrinterCardInfo>& cards) {
+  // Only rebuild (and trigger the reveal animation) when the card data has
+  // actually changed — the caller runs every main-loop tick, so without this
+  // guard the animation restarts hundreds of times per second.
+  const auto cards_equal = [](const std::vector<PrinterCardInfo>& a,
+                               const std::vector<PrinterCardInfo>& b) {
+    if (a.size() != b.size()) return false;
+    for (size_t i = 0; i < a.size(); ++i) {
+      if (a[i].index != b[i].index ||
+          a[i].active != b[i].active ||
+          a[i].connected != b[i].connected ||
+          a[i].name != b[i].name ||
+          a[i].model != b[i].model ||
+          a[i].host != b[i].host) {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (cards_equal(cards, last_printer_cards_)) {
+    return;
+  }
+  last_printer_cards_ = cards;
+
+  if (bsp_display_lock(200) != ESP_OK) {
+    return;
+  }
+  rebuild_printer_cards_locked(cards);
+  bsp_display_unlock();
+}
+
+void PrinterPlugin::rebuild_printer_cards_locked(const std::vector<PrinterCardInfo>& cards) {
+  // Remove old card widgets
+  for (auto& cw : page0_cards_) {
+    if (cw.card != nullptr) {
+      lv_obj_delete(cw.card);
+    }
+  }
+  page0_cards_.clear();
+
+  const bool empty = cards.empty();
+  set_hidden(card_list_, empty);
+  set_hidden(empty_note_, !empty);
+  if (empty) {
+    return;
+  }
+
+  const lv_font_t* font_name = &dosis_20;
+  const lv_font_t* font_detail = &lv_font_montserrat_14;
+
+  int card_idx = 0;
+  for (const auto& info : cards) {
+    // Card container — glasmorphism-lite: semi-transparent bg + shadow elevation
+    lv_obj_t* card = lv_obj_create(card_list_);
+    lv_obj_set_size(card, 340, LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(card, 72, 0);
+    lv_obj_set_style_bg_color(card, lv_color_hex(0x1E1E1E), 0);
+    lv_obj_set_style_bg_opa(card, 195, 0);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_set_style_pad_row(card, 2, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    // Shadow for 3D depth on OLED
+    lv_obj_set_style_shadow_width(card, 20, 0);
+    lv_obj_set_style_shadow_color(card, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(card, LV_OPA_50, 0);
+    lv_obj_set_style_shadow_offset_y(card, 6, 0);
+
+    if (info.active) {
+      lv_obj_set_style_border_color(card, lv_color_hex(0x00CC66), 0);
+      lv_obj_set_style_border_width(card, 2, 0);
+      lv_obj_set_style_border_opa(card, LV_OPA_COVER, 0);
+    } else {
+      // Subtle border to define card edges on dark background
+      lv_obj_set_style_border_color(card, lv_color_hex(0x303030), 0);
+      lv_obj_set_style_border_width(card, 1, 0);
+      lv_obj_set_style_border_opa(card, LV_OPA_60, 0);
+    }
+
+    lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(card, &PrinterPlugin::printer_card_click_cb, LV_EVENT_CLICKED, this);
+
+    // Status dot — small colored circle in top-right
+    lv_obj_t* dot = lv_obj_create(card);
+    lv_obj_set_size(dot, 10, 10);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(dot, info.connected ? lv_color_hex(0x00CC66) : lv_color_hex(0x666666), 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_align(dot, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    // Printer name (bold, larger)
+    lv_obj_t* name_lbl = lv_label_create(card);
+    const std::string display_name = info.name.empty() ? info.model : info.name;
+    set_label_text_if_changed(name_lbl, display_name);
+    lv_obj_set_width(name_lbl, 300);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(name_lbl, font_name, 0);
+    lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Model
+    lv_obj_t* model_lbl = lv_label_create(card);
+    set_label_text_if_changed(model_lbl, info.model.empty() ? "Unknown" : info.model);
+    lv_obj_set_width(model_lbl, 300);
+    lv_label_set_long_mode(model_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(model_lbl, font_detail, 0);
+    lv_obj_set_style_text_color(model_lbl, lv_color_hex(0x888888), 0);
+    lv_obj_align_to(model_lbl, name_lbl, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+
+    // Host IP
+    lv_obj_t* host_lbl = lv_label_create(card);
+    set_label_text_if_changed(host_lbl, info.host.empty() ? "No local IP" : info.host);
+    lv_obj_set_width(host_lbl, 300);
+    lv_label_set_long_mode(host_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_font(host_lbl, font_detail, 0);
+    lv_obj_set_style_text_color(host_lbl, lv_color_hex(0x666666), 0);
+    lv_obj_align_to(host_lbl, model_lbl, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 2);
+
+    PrinterCardWidgets cw;
+    cw.card = card;
+    cw.name_label = name_lbl;
+    cw.model_label = model_lbl;
+    cw.host_label = host_lbl;
+    cw.status_dot = dot;
+    cw.profile_index = info.index;
+    page0_cards_.push_back(cw);
+
+    // Cascading reveal: start hidden below, fade + slide in with staggered delay
+    lv_obj_set_style_opa(card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_translate_y(card, kCardRevealYStart, 0);
+    const uint32_t reveal_delay = static_cast<uint32_t>(card_idx) * kCardRevealStaggerMs;
+
+    lv_anim_t ry;
+    lv_anim_init(&ry);
+    lv_anim_set_var(&ry, card);
+    lv_anim_set_exec_cb(&ry, card_reveal_y_exec_cb);
+    lv_anim_set_values(&ry, kCardRevealYStart, 0);
+    lv_anim_set_duration(&ry, kCardRevealDurationMs);
+    lv_anim_set_delay(&ry, reveal_delay);
+    LV_ANIM_SET_EASE_OUT_BACK(&ry);
+    lv_anim_set_path_cb(&ry, lv_anim_path_custom_bezier3);
+    lv_anim_start(&ry);
+
+    lv_anim_t ro;
+    lv_anim_init(&ro);
+    lv_anim_set_var(&ro, card);
+    lv_anim_set_exec_cb(&ro, card_reveal_opa_exec_cb);
+    lv_anim_set_values(&ro, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&ro, kCardRevealDurationMs);
+    lv_anim_set_delay(&ro, reveal_delay);
+    lv_anim_set_path_cb(&ro, lv_anim_path_ease_out);
+    lv_anim_start(&ro);
+
+    ++card_idx;
+  }
+}
+
+void PrinterPlugin::replay_card_animations_locked() {
+  int card_idx = 0;
+  for (const PrinterCardWidgets& cw : page0_cards_) {
+    lv_obj_set_style_opa(cw.card, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_translate_y(cw.card, kCardRevealYStart, 0);
+    const uint32_t reveal_delay = static_cast<uint32_t>(card_idx) * kCardRevealStaggerMs;
+
+    lv_anim_t ry;
+    lv_anim_init(&ry);
+    lv_anim_set_var(&ry, cw.card);
+    lv_anim_set_exec_cb(&ry, card_reveal_y_exec_cb);
+    lv_anim_set_values(&ry, kCardRevealYStart, 0);
+    lv_anim_set_duration(&ry, kCardRevealDurationMs);
+    lv_anim_set_delay(&ry, reveal_delay);
+    LV_ANIM_SET_EASE_OUT_BACK(&ry);
+    lv_anim_set_path_cb(&ry, lv_anim_path_custom_bezier3);
+    lv_anim_start(&ry);
+
+    lv_anim_t ro;
+    lv_anim_init(&ro);
+    lv_anim_set_var(&ro, cw.card);
+    lv_anim_set_exec_cb(&ro, card_reveal_opa_exec_cb);
+    lv_anim_set_values(&ro, LV_OPA_TRANSP, LV_OPA_COVER);
+    lv_anim_set_duration(&ro, kCardRevealDurationMs);
+    lv_anim_set_delay(&ro, reveal_delay);
+    lv_anim_set_path_cb(&ro, lv_anim_path_ease_out);
+    lv_anim_start(&ro);
+
+    ++card_idx;
+  }
+}
+
 void PrinterPlugin::tick(uint64_t now_ms) {
   const TickType_t now_tick = xTaskGetTickCount();
-  const int switch_idx = ui_->consume_printer_switch_request();
+  const int switch_idx = consume_printer_switch_request();
   if (switch_idx >= 0 &&
       static_cast<uint8_t>(switch_idx) != config_store_->load_active_printer_index()) {
     config_store_->save_active_printer_index(static_cast<uint8_t>(switch_idx));
@@ -433,10 +730,10 @@ void PrinterPlugin::tick(uint64_t now_ms) {
     const auto profiles = config_store_->load_printer_profiles();
     const uint8_t active_idx = config_store_->load_active_printer_index();
     const bool local_connected = printer_client_.snapshot().local_connected;
-    std::vector<Ui::PrinterCardInfo> cards;
+    std::vector<PrinterCardInfo> cards;
     cards.reserve(profiles.size());
     for (const auto& p : profiles) {
-      Ui::PrinterCardInfo ci;
+      PrinterCardInfo ci;
       ci.index = p.index;
       ci.name = p.display_name;
       ci.model = p.model;
@@ -445,7 +742,7 @@ void PrinterPlugin::tick(uint64_t now_ms) {
       ci.connected = ci.active && local_connected;
       cards.push_back(std::move(ci));
     }
-    ui_->update_printer_cards(cards);
+    update_printer_cards(cards);
   }
   const bool wifi_connected = wifi_manager_->is_station_connected();
   const std::string wifi_ip = wifi_manager_->station_ip();

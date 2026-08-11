@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "freertos/FreeRTOS.h"
 #include "printsphere/bambu_cloud_client.hpp"
@@ -50,7 +52,9 @@ class PrinterPlugin : public Plugin {
   uint32_t desired_poll_interval_ms() const override;
 
   void build_tile(lv_obj_t*) override {}
-  void build_screen(lv_obj_t*) override {}
+  // Builds the printer-selector page0 content (title/card list/empty note)
+  // into the container Ui hands out via printer_select_page_container().
+  void build_screen(lv_obj_t* parent) override;
   void register_portal_routes(httpd_handle_t server) override;
   std::string portal_settings_html() const override { return {}; }
   void load_config() override {}
@@ -82,6 +86,40 @@ class PrinterPlugin : public Plugin {
   static esp_err_t handle_printers_save(httpd_req_t* request);
   static esp_err_t handle_printers_delete(httpd_req_t* request);
   static esp_err_t handle_printers_clear_local(httpd_req_t* request);
+
+  // Phase 6a: page0 (printer-selector) card management, moved here from Ui
+  // (see CLAUDE.md's "Ui changes sketch" / the Phase 6a plan). Ui only owns
+  // the bare page0 container + the generic scroll-fade machinery; everything
+  // about what a "printer card" is lives here.
+  struct PrinterCardInfo {
+    uint8_t index = 0;
+    std::string name;
+    std::string model;
+    std::string host;
+    bool active = false;
+    bool connected = false;
+  };
+  struct PrinterCardWidgets {
+    lv_obj_t* card = nullptr;
+    lv_obj_t* name_label = nullptr;
+    lv_obj_t* model_label = nullptr;
+    lv_obj_t* host_label = nullptr;
+    lv_obj_t* status_dot = nullptr;
+    uint8_t profile_index = 0;
+  };
+  void update_printer_cards(const std::vector<PrinterCardInfo>& cards);
+  int consume_printer_switch_request();
+  void rebuild_printer_cards_locked(const std::vector<PrinterCardInfo>& cards);
+  void replay_card_animations_locked();
+  static void replay_card_animations_trampoline(void* user_data);
+  static void printer_card_click_cb(lv_event_t* event);
+
+  lv_obj_t* title_ = nullptr;
+  lv_obj_t* card_list_ = nullptr;
+  lv_obj_t* empty_note_ = nullptr;
+  std::vector<PrinterCardWidgets> page0_cards_;
+  std::vector<PrinterCardInfo> last_printer_cards_;  // change-detection cache
+  int pending_printer_switch_ = -1;
 
   // Core service references, captured during init(). Plugin is default-
   // constructed as an Application member before init() runs, so these start

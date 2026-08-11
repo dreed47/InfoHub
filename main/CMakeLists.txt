@@ -74,6 +74,7 @@ idf_component_register(
         "src/time_sync.cpp"
         "src/ui.cpp"
         "src/ui_shell.cpp"
+        "src/ui_toolkit.cpp"
         "src/wifi_manager.cpp"
         ${PRINTSPHERE_PLUGIN_SRCS}
     INCLUDE_DIRS

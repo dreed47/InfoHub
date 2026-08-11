@@ -106,16 +106,6 @@ class Ui {
   }
   bool consume_portal_unlock_request();
 
-  struct PrinterCardInfo {
-    uint8_t index = 0;
-    std::string name;
-    std::string model;
-    std::string host;
-    bool active = false;
-    bool connected = false;
-  };
-  void update_printer_cards(const std::vector<PrinterCardInfo>& cards);
-  int consume_printer_switch_request();
   void request_wake_display();
 
   // The one reserved generic plugin-page slot (kPageIdxPluginPage) — see the
@@ -124,6 +114,21 @@ class Ui {
   // pager via set_plugin_page_enabled() from its own update_ui().
   lv_obj_t* plugin_page_container() const { return plugin_page_; }
   void set_plugin_page_enabled(bool enabled) { plugin_page_enabled_ = enabled; }
+
+  // Page 0 (printer-selector) is a fixed pager slot (kPageIdxPrinterSelect,
+  // always present — PrinterPlugin is not Kconfig-optional like weather is)
+  // but its content is owned by PrinterPlugin, same "Ui hands out a bare
+  // container" pattern as plugin_page_container() above.
+  lv_obj_t* printer_select_page_container() const { return page0_; }
+  // PrinterPlugin calls this once after building its page0 widgets, so Ui's
+  // existing page0<->page1 scroll fade (apply_page0_parallax) has something
+  // to animate without needing to know what a "printer card" is.
+  void register_page0_fade_targets(lv_obj_t* title, lv_obj_t* card_list, lv_obj_t* empty_note);
+  // Same static-fn/user_data idiom as every other LVGL callback in this file.
+  // Invoked from set_active_page() when the pager returns to page0, so
+  // PrinterPlugin can replay its card reveal animation.
+  using Page0ReentryCallback = void (*)(void* user_data);
+  void register_page0_reentry_callback(Page0ReentryCallback callback, void* user_data);
 
  private:
   // Phase 6/9 (plugin-architecture extraction, see CLAUDE.md "Ui changes
@@ -196,26 +201,15 @@ class Ui {
   lv_obj_t* screen_ = nullptr;
   lv_obj_t* fixed_overlay_ = nullptr;
   lv_obj_t* page0_ = nullptr;
-  lv_obj_t* page0_title_ = nullptr;
-  lv_obj_t* page0_card_list_ = nullptr;
-  lv_obj_t* page0_empty_note_ = nullptr;
+  // Non-owning pointers registered by PrinterPlugin via
+  // register_page0_fade_targets() — see that method's comment.
+  lv_obj_t* page0_fade_title_ = nullptr;
+  lv_obj_t* page0_fade_card_list_ = nullptr;
+  lv_obj_t* page0_fade_empty_note_ = nullptr;
+  Page0ReentryCallback page0_reentry_cb_ = nullptr;
+  void* page0_reentry_user_data_ = nullptr;
 
-  struct PrinterCardWidgets {
-    lv_obj_t* card = nullptr;
-    lv_obj_t* name_label = nullptr;
-    lv_obj_t* model_label = nullptr;
-    lv_obj_t* host_label = nullptr;
-    lv_obj_t* status_dot = nullptr;
-    uint8_t profile_index = 0;
-  };
-  std::vector<PrinterCardWidgets> page0_cards_;
-  std::vector<PrinterCardInfo>    last_printer_cards_;  // change-detection cache
-  int pending_printer_switch_ = -1;
-
-  void rebuild_printer_cards_locked(const std::vector<PrinterCardInfo>& cards);
-  void replay_card_animations_locked();
   void apply_page0_parallax(bool force = false);
-  static void printer_card_click_cb(lv_event_t* event);
 
   // --- AMS pages (page indices 1..kMaxAmsUnits) ---
   // One page per AMS unit. ams_pages_[0] additionally hosts the external-spool

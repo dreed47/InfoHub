@@ -169,10 +169,6 @@ void Application::run() {
   }
   ESP_ERROR_CHECK(ui_.initialize());
 
-#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
-  weather_plugin_.build_screen(ui_.plugin_page_container());
-#endif
-
   PluginContext plugin_ctx{config_store_, wifi_manager_,   ui_,
                            setup_portal_,  pmu_manager_,    audio_notifier_};
   for (Plugin* plugin : plugins_) {
@@ -181,6 +177,13 @@ void Application::run() {
     }
     ESP_ERROR_CHECK(plugin->init(plugin_ctx));
   }
+
+  // build_screen() runs after init() so plugins that need their own
+  // core-service refs (e.g. PrinterPlugin::ui_) have them set first.
+  printer_plugin_.build_screen(ui_.printer_select_page_container());
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  weather_plugin_.build_screen(ui_.plugin_page_container());
+#endif
 
   ESP_LOGI(kTag, "Bootstrap complete");
 
