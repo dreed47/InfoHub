@@ -41,6 +41,7 @@ class WeatherPlugin : public Plugin {
  private:
   static esp_err_t handle_config_get(httpd_req_t* request);
   static esp_err_t handle_config_post(httpd_req_t* request);
+  static esp_err_t handle_enabled_post(httpd_req_t* request);
 
   ConfigStore* config_store_ = nullptr;
   WifiManager* wifi_manager_ = nullptr;

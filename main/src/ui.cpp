@@ -2602,6 +2602,30 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_add_flag(brightness_overlay_, LV_OBJ_FLAG_HIDDEN);
   lv_obj_move_foreground(brightness_overlay_);
 
+  // Shown full-screen whenever every plugin's page is disabled (nothing left
+  // for the pager to show) — see update_no_plugins_overlay_locked(). Created
+  // before portal_overlay_card_ so the PIN unlock overlay always draws on
+  // top of this one if both ever coincide (portal_overlay_card_ also calls
+  // lv_obj_move_foreground() on itself below).
+  no_plugins_overlay_ = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(no_plugins_overlay_, board::kDisplayWidth, board::kDisplayHeight);
+  make_transparent(no_plugins_overlay_);
+  lv_obj_set_style_bg_color(no_plugins_overlay_, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(no_plugins_overlay_, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(no_plugins_overlay_, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_clear_flag(no_plugins_overlay_, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(no_plugins_overlay_, LV_OBJ_FLAG_HIDDEN);
+
+  no_plugins_overlay_label_ = lv_label_create(no_plugins_overlay_);
+  set_label_text_if_changed(no_plugins_overlay_label_,
+                             "No plugins enabled.\nEnable one or more in Web Config.");
+  lv_obj_set_width(no_plugins_overlay_label_, 340);
+  lv_label_set_long_mode(no_plugins_overlay_label_, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(no_plugins_overlay_label_, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(no_plugins_overlay_label_, dosis20, 0);
+  lv_obj_set_style_text_color(no_plugins_overlay_label_, lv_color_hex(0x999999), 0);
+  lv_obj_center(no_plugins_overlay_label_);
+
   portal_overlay_card_ = lv_obj_create(lv_layer_top());
   lv_obj_set_size(portal_overlay_card_, 280, LV_SIZE_CONTENT);
   lv_obj_set_style_radius(portal_overlay_card_, 22, 0);
@@ -2861,6 +2885,10 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
     return;
   }
 
+  hide_printer_content_pages_locked();
+}
+
+void Ui::hide_printer_content_pages_locked() {
   for (int u = 0; u < kMaxAmsUnits; ++u) {
     if (ams_pages_[u] != nullptr) {
       set_hidden(ams_pages_[u], !ams_unit_present_[u]);
@@ -2902,12 +2930,62 @@ void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
   // Ring timer resume is handled by apply_ring_visual_locked via apply_snapshot.
 }
 
+void Ui::set_printer_plugin_enabled(bool enabled) {
+  LvglLockGuard lock(200, "set_printer_plugin_enabled");
+  if (!lock.locked()) {
+    return;
+  }
+  printer_plugin_enabled_ = enabled;
+  set_hidden(page0_, !enabled);
+  set_hidden(page1_, !enabled);
+  if (enabled) {
+    // AMS/preview/camera availability re-populates (including their own
+    // set_hidden() calls) naturally on PrinterPlugin's next update_ui() tick
+    // (now resumed) via update_page_availability_locked().
+    active_page_ = clamp_enabled_page(active_page_);
+    publish_page_state_snapshot();
+    update_no_plugins_overlay_locked();
+    return;
+  }
+  for (int u = 0; u < kMaxAmsUnits; ++u) {
+    ams_unit_present_[u] = false;
+  }
+  preview_page_available_ = false;
+  camera_page_available_ = false;
+  hide_printer_content_pages_locked();
+  update_no_plugins_overlay_locked();
+}
+
+void Ui::set_plugin_page_enabled(bool enabled) {
+  LvglLockGuard lock(200, "set_plugin_page_enabled");
+  if (!lock.locked()) {
+    return;
+  }
+  if (plugin_page_enabled_ == enabled) {
+    return;
+  }
+  plugin_page_enabled_ = enabled;
+  set_hidden(plugin_page_, !enabled);
+  active_page_ = clamp_enabled_page(active_page_);
+  lv_obj_update_layout(ui_shell_.pager());
+  if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
+    lv_obj_scroll_to_view(target_page, LV_ANIM_OFF);
+  }
+  scrolling_ = false;
+  publish_page_state_snapshot();
+  update_no_plugins_overlay_locked();
+}
+
+void Ui::update_no_plugins_overlay_locked() {
+  set_hidden(no_plugins_overlay_, ui_shell_.any_page_enabled());
+}
+
 void Ui::register_page_slots() {
-  ui_shell_.register_page_slot(kPageIdxPrinterSelect, &page0_, nullptr);
+  ui_shell_.register_page_slot(kPageIdxPrinterSelect, &page0_, &printer_plugin_enabled_);
   for (int u = 0; u < kMaxAmsUnits; ++u) {
     ui_shell_.register_page_slot(kPageIdxAmsFirst + u, &ams_pages_[u], &ams_unit_present_[u]);
   }
-  ui_shell_.register_page_slot(kPageIdxMain, &page1_, nullptr);
+  ui_shell_.register_page_slot(kPageIdxMain, &page1_, &printer_plugin_enabled_);
   ui_shell_.register_page_slot(kPageIdxPreview, &page2_, &preview_page_available_);
   ui_shell_.register_page_slot(kPageIdxCamera, &page3_, &camera_page_available_);
   ui_shell_.register_page_slot(kPageIdxPluginPage, &plugin_page_, &plugin_page_enabled_);

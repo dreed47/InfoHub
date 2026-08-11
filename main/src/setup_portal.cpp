@@ -1287,13 +1287,13 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "<h1 class=\"title\">Web Config</h1>";
   html += "<p class=\"subtitle\">";
   html += show_connection_steps
-              ? "The ESP is on your home network. You can manage cloud access, local printer access and UI tuning below."
+              ? "The ESP is on your home network. You can manage Bambu cloud access, local printer access and UI tuning below."
               : "In setup AP mode this page only asks for your home Wi-Fi. Save it, let the ESP reboot, then reopen the portal on the home-network IP.";
   html += "</p></div>";
   html += "<div class=\"badge-grid\">";
   add_badge(&html, "wifi-badge", "Wi-Fi", wifi_badge_value, wifi_badge_class);
   if (show_connection_steps) {
-    add_badge(&html, "printer-badge", "Printer", printer_group_badge_value, printer_group_badge_class);
+    add_badge(&html, "printer-badge", "Bambu Printer", printer_group_badge_value, printer_group_badge_class);
   }
 #if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
   if (show_connection_steps) {
@@ -1308,7 +1308,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "</div>";
   html += "<div class=\"hint-box\"><strong>Note:</strong> ";
   html += show_connection_steps
-              ? "Wi-Fi is up. Review or update cloud, local printer access and UI settings below."
+              ? "Wi-Fi is up. Review or update Bambu cloud, local printer access and UI settings below."
               : "Only the Wi-Fi step is available while the ESP is running its setup access point.";
   html += "</div>";
   html += "</section>";
@@ -1714,9 +1714,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     // printer_group_badge_value/class computed once, near the top badge
     // strip — reused here for this section's own header badge.
     begin_collapsible_section(
-        "Printer",
+        "Bambu Printer",
         "Bambu printer connection, AMS display, sound events and connection mode — everything specific to the printer plugin.",
         printer_group_badge_value, printer_group_badge_class, false);
+    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"printer_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
     html += "<div class=\"settings-accordion\">";
 
     begin_settings_panel(
@@ -2005,6 +2006,28 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       render_local_section(true);
     }
 
+    begin_settings_panel(
+        "Status Ring Colors",
+        "These groups control the Bambu printer status ring's colors, pulsing states, and text tint on the on-device display.",
+        arc_badge_value, arc_badge_class, arc_section_open);
+    html += "<p class=\"micro\">Color changes preview live immediately and are saved automatically. No restart is needed for color tuning.</p>";
+    html += "<div class=\"color-grid\">";
+    add_color_field("arc_printing", "Printing", arc_colors.printing);
+    add_color_field("arc_done", "Done", arc_colors.done);
+    add_color_field("arc_error", "Error", arc_colors.error);
+    add_color_field("arc_idle", "Idle", arc_colors.idle);
+    add_color_field("arc_preheat", "Preheat", arc_colors.preheat);
+    add_color_field("arc_clean", "Clean", arc_colors.clean);
+    add_color_field("arc_level", "Level", arc_colors.level);
+    add_color_field("arc_cool", "Cool", arc_colors.cool);
+    add_color_field("arc_idle_active", "Idle Active", arc_colors.idle_active);
+    add_color_field("arc_filament", "Filament", arc_colors.filament);
+    add_color_field("arc_setup", "Setup", arc_colors.setup);
+    add_color_field("arc_offline", "Offline", arc_colors.offline);
+    add_color_field("arc_unknown", "Fallback", arc_colors.unknown);
+    html += "</div>";
+    end_settings_panel();
+
     html += "</div>";
     end_collapsible_section();
   }
@@ -2035,30 +2058,6 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
 
   if (wifi_configured) {
     render_wifi_section();
-  }
-
-  if (show_connection_steps) {
-    begin_collapsible_section(
-        "Arc Colors",
-        "These groups control ring colors, pulsing states and status colors in the UI. The values map directly to your native PrintSphere interface.",
-        arc_badge_value, arc_badge_class, arc_section_open);
-    html += "<p class=\"micro\">Color changes preview live immediately and are saved automatically. No restart is needed for color tuning.</p>";
-    html += "<div class=\"color-grid\">";
-    add_color_field("arc_printing", "Printing", arc_colors.printing);
-    add_color_field("arc_done", "Done", arc_colors.done);
-    add_color_field("arc_error", "Error", arc_colors.error);
-    add_color_field("arc_idle", "Idle", arc_colors.idle);
-    add_color_field("arc_preheat", "Preheat", arc_colors.preheat);
-    add_color_field("arc_clean", "Clean", arc_colors.clean);
-    add_color_field("arc_level", "Level", arc_colors.level);
-    add_color_field("arc_cool", "Cool", arc_colors.cool);
-    add_color_field("arc_idle_active", "Idle Active", arc_colors.idle_active);
-    add_color_field("arc_filament", "Filament", arc_colors.filament);
-    add_color_field("arc_setup", "Setup", arc_colors.setup);
-    add_color_field("arc_offline", "Offline", arc_colors.offline);
-    add_color_field("arc_unknown", "Fallback", arc_colors.unknown);
-    html += "</div>";
-    end_collapsible_section();
   }
 
   // --- Firmware Update (OTA) section ---
@@ -2751,13 +2750,38 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
           "station_id:document.getElementById('weather_station_id').value.trim(),"
           "api_token:document.getElementById('weather_api_token').value,"
-          "poll_s:document.getElementById('weather_poll_s').value,"
-          "enabled:document.getElementById('weather_enabled').checked})});"
+          "poll_s:document.getElementById('weather_poll_s').value})});"
           "document.getElementById('weather_api_token').value='';"
           "await loadWeatherStatus();}"
           "catch(error){}finally{weatherSaveButton.disabled=false;}});}";
   html += "loadWeatherStatus();setInterval(loadWeatherStatus,5000);";
+  html += "const weatherEnabledInput=document.getElementById('weather_enabled');";
+  html += "if(weatherEnabledInput){weatherEnabledInput.addEventListener('change',async()=>{"
+          "weatherEnabledInput.disabled=true;"
+          "try{await fetch('/api/plugins/weather/enabled',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:weatherEnabledInput.checked})});}"
+          "catch(error){}finally{weatherEnabledInput.disabled=false;}});}";
 #endif
+
+  // --- Printer enabled toggle JS ---
+  // Same "sync once, then let the user's own toggle win" pattern as
+  // weather's station_id/poll_s fields — reused here so the periodic status
+  // poll doesn't stomp an in-flight click.
+  html += "let printerEnabledLoaded=false;";
+  html += "async function loadPrinterEnabled(){"
+          "try{const response=await fetch('/api/plugins/printer/config',{cache:'no-store'});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(!printerEnabledLoaded){const enabledInput=document.getElementById('printer_enabled');"
+          "if(enabledInput)enabledInput.checked=body.enabled!==false;"
+          "printerEnabledLoaded=true;}}"
+          "catch(error){}}";
+  html += "const printerEnabledInput=document.getElementById('printer_enabled');";
+  html += "if(printerEnabledInput){printerEnabledInput.addEventListener('change',async()=>{"
+          "printerEnabledInput.disabled=true;"
+          "try{await fetch('/api/plugins/printer/enabled',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:printerEnabledInput.checked})});}"
+          "catch(error){}finally{printerEnabledInput.disabled=false;}});}";
+  html += "loadPrinterEnabled();setInterval(loadPrinterEnabled,5000);";
 
   // --- Printer selection JS ---
   // Auto-refresh guard: if the page was rendered while the Cloud binding call

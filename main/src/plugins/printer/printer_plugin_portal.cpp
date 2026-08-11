@@ -908,8 +908,9 @@ esp_err_t PrinterPlugin::handle_plugin_printer_config_get(httpd_req_t* request) 
     return cloud_snapshot.resolved_serial;
   }();
 
-  std::string body = "{";
-  body += "\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
+  std::string body = "{\"enabled\":";
+  body += plugin->enabled() ? "true" : "false";
+  body += ",\"cloud_email\":\"" + json_escape(cloud.email) + "\",";
   body += "\"cloud_region\":\"" + json_escape(to_string(cloud.region)) + "\",";
   body += "\"printer_host\":\"" + json_escape(printer.host) + "\",";
   body += "\"printer_serial\":\"" + json_escape(effective_printer_serial) + "\",";
@@ -926,6 +927,31 @@ esp_err_t PrinterPlugin::handle_plugin_printer_config_get(httpd_req_t* request) 
   body += "}";
 
   send_json(request, body);
+  return ESP_OK;
+}
+
+esp_err_t PrinterPlugin::handle_enabled_post(httpd_req_t* request) {
+  auto* plugin = static_cast<PrinterPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  cJSON* root = nullptr;
+  const esp_err_t parse_err = receive_json_body(request, &root);
+  if (parse_err != ESP_OK) {
+    return parse_err;
+  }
+  const bool enabled = read_bool_field(root, "enabled", plugin->enabled());
+  cJSON_Delete(root);
+
+  plugin->config_store_->save_plugin_string(plugin->id(), "enabled", enabled ? "1" : "0");
+  plugin->set_enabled(enabled);
+  plugin->ui_->set_printer_plugin_enabled(enabled);
+
+  send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;
 }
 
@@ -949,6 +975,7 @@ void PrinterPlugin::register_portal_routes(httpd_handle_t server) {
       {"/api/printers/delete", HTTP_POST, &PrinterPlugin::handle_printers_delete},
       {"/api/printers/clear-local", HTTP_POST, &PrinterPlugin::handle_printers_clear_local},
       {"/api/plugins/printer/config", HTTP_GET, &PrinterPlugin::handle_plugin_printer_config_get},
+      {"/api/plugins/printer/enabled", HTTP_POST, &PrinterPlugin::handle_enabled_post},
   };
 
   for (const RouteEntry& route : kRoutes) {

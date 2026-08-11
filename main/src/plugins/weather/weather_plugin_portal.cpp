@@ -89,7 +89,6 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   const std::string submitted_station_id = trim_copy(read_string_field(root, "station_id"));
   const std::string submitted_api_token = read_string_field(root, "api_token");
   const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
-  const bool enabled = read_bool_field(root, "enabled", plugin->enabled());
   cJSON_Delete(root);
 
   const std::string stored_api_token =
@@ -107,9 +106,35 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   plugin->config_store_->save_plugin_string(kPluginNs, "station_id", submitted_station_id);
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
   plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
-  plugin->config_store_->save_plugin_string(kPluginNs, "enabled", enabled ? "1" : "0");
 
   plugin->client_.configure(submitted_station_id, api_token, poll_interval_s);
+
+  send_json(request, "{\"status\":\"saved\"}");
+  return ESP_OK;
+}
+
+// Separate from handle_config_post (which resaves station_id/api_token/poll_s
+// unconditionally on every submit) so toggling the checkbox can apply
+// instantly without risking a partial payload wiping those fields — same
+// split PrinterPlugin uses for its own enabled toggle.
+esp_err_t WeatherPlugin::handle_enabled_post(httpd_req_t* request) {
+  auto* plugin = static_cast<WeatherPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  cJSON* root = nullptr;
+  const esp_err_t parse_err = receive_json_body(request, &root);
+  if (parse_err != ESP_OK) {
+    return parse_err;
+  }
+  const bool enabled = read_bool_field(root, "enabled", plugin->enabled());
+  cJSON_Delete(root);
+
+  plugin->config_store_->save_plugin_string(kPluginNs, "enabled", enabled ? "1" : "0");
   plugin->set_enabled(enabled);
   if (!enabled && plugin->ui_ != nullptr) {
     // Application's update_ui() loop skips disabled plugins, so the pager
@@ -136,6 +161,13 @@ void WeatherPlugin::register_portal_routes(httpd_handle_t server) {
   post_uri.handler = &WeatherPlugin::handle_config_post;
   post_uri.user_ctx = this;
   httpd_register_uri_handler(server, &post_uri);
+
+  httpd_uri_t enabled_uri = {};
+  enabled_uri.uri = "/api/plugins/weather/enabled";
+  enabled_uri.method = HTTP_POST;
+  enabled_uri.handler = &WeatherPlugin::handle_enabled_post;
+  enabled_uri.user_ctx = this;
+  httpd_register_uri_handler(server, &enabled_uri);
 }
 
 }  // namespace printsphere

@@ -454,6 +454,9 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   if (!initialize_error_lookup_storage()) {
     ESP_LOGW(kTag, "Embedded error lookup unavailable; falling back to generic error text");
   }
+
+  set_enabled(ctx.config_store.load_plugin_string(id(), "enabled") != "0");
+  ui_->set_printer_plugin_enabled(enabled());
   return ESP_OK;
 }
 
@@ -716,6 +719,11 @@ void PrinterPlugin::replay_card_animations_locked() {
 }
 
 bool PrinterPlugin::is_provisioning_satisfied() const {
+  if (!enabled()) {
+    // An explicitly-disabled printer shouldn't block the setup portal from
+    // auto-closing on Wi-Fi connectivity alone.
+    return true;
+  }
   const SourceMode source_mode = config_store_->load_source_mode();
   const bool local_connected =
       printer_client_.snapshot().connection == PrinterConnectionState::kOnline;

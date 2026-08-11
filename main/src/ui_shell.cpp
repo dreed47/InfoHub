@@ -56,6 +56,15 @@ int UiShell::next_enabled_page(int page, int direction) const {
   return page;
 }
 
+bool UiShell::any_page_enabled() const {
+  for (int page = 0; page <= kPageIdxLast; ++page) {
+    if (page_enabled(page)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 int UiShell::clamp_enabled_page(int page) const {
   if (page_enabled(page)) {
     return page;

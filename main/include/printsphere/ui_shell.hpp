@@ -56,6 +56,10 @@ class UiShell {
   int next_enabled_page(int page, int direction) const;
   int clamp_enabled_page(int page) const;
   int nearest_enabled_page_for_scroll(int active_page) const;
+  // True if at least one registered page slot is currently enabled — used to
+  // decide whether the pager has anything to show at all, vs. every plugin
+  // having been disabled in Web Config.
+  bool any_page_enabled() const;
 
   // --- Pager object + scroll lock ---
   void bind_pager(lv_obj_t* pager) { pager_ = pager; }

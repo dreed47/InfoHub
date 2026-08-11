@@ -105,6 +105,10 @@ class PrinterPlugin : public Plugin {
   // Phase 7: was left behind in SetupPortal during 8d despite already being
   // registered at the plugin-owned /api/plugins/printer/config path.
   static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
+  // Separate from the config GET/the other printer POST routes above (those
+  // all trigger a reboot on change) — this one applies live, same shape as
+  // WeatherPlugin's enabled toggle.
+  static esp_err_t handle_enabled_post(httpd_req_t* request);
 
   // Phase 6a: page0 (printer-selector) card management, moved here from Ui
   // (see CLAUDE.md's "Ui changes sketch" / the Phase 6a plan). Ui only owns

@@ -113,7 +113,7 @@ class Ui {
   // container during Application startup, then drives visibility in the
   // pager via set_plugin_page_enabled() from its own update_ui().
   lv_obj_t* plugin_page_container() const { return plugin_page_; }
-  void set_plugin_page_enabled(bool enabled) { plugin_page_enabled_ = enabled; }
+  void set_plugin_page_enabled(bool enabled);
 
   // Page 0 (printer-selector) is a fixed pager slot (kPageIdxPrinterSelect,
   // always present — PrinterPlugin is not Kconfig-optional like weather is)
@@ -129,6 +129,13 @@ class Ui {
   // PrinterPlugin can replay its card reveal animation.
   using Page0ReentryCallback = void (*)(void* user_data);
   void register_page0_reentry_callback(Page0ReentryCallback callback, void* user_data);
+
+  // Umbrella on/off switch for all of PrinterPlugin's page groups (page0,
+  // page1, AMS units, preview, camera) — see PrinterPlugin::init()/its portal
+  // enabled toggle. Disabling forces every one of those pages hidden
+  // immediately (they'd otherwise freeze at their last state, since
+  // Application stops calling PrinterPlugin::update_ui() once disabled).
+  void set_printer_plugin_enabled(bool enabled);
 
  private:
   // Phase 6/9 (plugin-architecture extraction, see CLAUDE.md "Ui changes
@@ -157,6 +164,15 @@ class Ui {
   void apply_page_visibility();
   void apply_logo_visibility();
   void update_page_availability_locked(const PrinterSnapshot& snapshot);
+  // Shared by update_page_availability_locked() (snapshot-driven) and
+  // set_printer_plugin_enabled(false) (immediate, no snapshot available) —
+  // hides ams_pages_/page2_/page3_, releases preview/camera image resources,
+  // reclamps active_page_, and republishes page state.
+  void hide_printer_content_pages_locked();
+  // Shows/hides no_plugins_overlay_ based on whether any pager page is
+  // currently enabled. Called after any page-enabled state changes
+  // (set_printer_plugin_enabled(), set_plugin_page_enabled()).
+  void update_no_plugins_overlay_locked();
   // Delegate to ui_shell_ — kept as same-named/same-signature Ui methods so
   // the many printer-content call sites below don't need touching.
   void note_activity(bool wake_display);
@@ -251,6 +267,9 @@ class Ui {
   lv_obj_t* page3_ = nullptr;
   lv_obj_t* plugin_page_ = nullptr;
   bool plugin_page_enabled_ = false;  // starts disabled — pager skips it until a plugin turns it on
+  bool printer_plugin_enabled_ = true;  // registered against page0/page1's slots
+  lv_obj_t* no_plugins_overlay_ = nullptr;
+  lv_obj_t* no_plugins_overlay_label_ = nullptr;
   lv_obj_t* status_arc_ = nullptr;
   lv_obj_t* progress_label_ = nullptr;
   lv_obj_t* battery_icon_label_ = nullptr;
