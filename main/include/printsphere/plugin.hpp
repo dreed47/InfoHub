@@ -12,6 +12,9 @@
 namespace printsphere {
 
 class Ui;
+class SetupPortal;
+class PmuManager;
+class AudioNotifier;
 
 // Maximum number of plugins compiled into one firmware image. Each plugin is
 // a compile-time unit (own Kconfig toggle + source files), not a
@@ -19,16 +22,22 @@ class Ui;
 // the "Plugin interface sketch" in CLAUDE.md for the full rationale.
 static constexpr uint8_t kMaxPlugins = 8;
 
+// Core services a plugin may need. Grown from the original 3-field sketch
+// once PrinterPlugin (Phase 8a) needed real access to portal PIN state,
+// battery sampling and audio playback — SetupPortal/PmuManager/AudioNotifier
+// stay core (owned by Application), plugins only borrow references.
 struct PluginContext {
   ConfigStore& config_store;
   WifiManager& wifi_manager;  // shared net stack; a plugin does not own its own Wi-Fi
   Ui& ui;
+  SetupPortal& setup_portal;
+  PmuManager& pmu_manager;
+  AudioNotifier& audio_notifier;
 };
 
-// Base class every plugin implements. NOT YET WIRED IN: Application does not
-// yet own a plugins_ array and nothing implements this interface — see the
-// "Phased extraction sequencing plan" in CLAUDE.md (this is Phase 4; the
-// printer becomes the first real implementation in a later phase).
+// Base class every plugin implements. Phase 8a: PrinterPlugin is now the
+// first real implementation (owns its clients, drives its own tick/update_ui
+// logic) — see the "Phased extraction sequencing plan" in CLAUDE.md.
 class Plugin {
  public:
   virtual ~Plugin() = default;
