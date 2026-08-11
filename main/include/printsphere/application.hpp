@@ -12,6 +12,9 @@
 #include "printsphere/ui.hpp"
 #include "printsphere/wifi_manager.hpp"
 #include "freertos/FreeRTOS.h"
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+#include "printsphere/plugins/weather/weather_plugin.hpp"
+#endif
 
 namespace printsphere {
 
@@ -33,6 +36,9 @@ class Application {
   // Declared before setup_portal_ so its clients exist first — SetupPortal's
   // constructor still takes direct client references (Phase 8d, deferred).
   PrinterPlugin printer_plugin_{};
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  WeatherPlugin weather_plugin_{};
+#endif
   SetupPortal setup_portal_;
   SerialProvisioner serial_provisioner_;
   std::array<Plugin*, kMaxPlugins> plugins_{};

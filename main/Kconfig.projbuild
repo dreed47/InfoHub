@@ -1,5 +1,16 @@
 menu "PrintSphere"
 
+    config PRINTSPHERE_PLUGIN_WEATHER
+        bool "Enable weather plugin (WeatherFlow Tempest cloud API)"
+        default n
+        help
+            Enables the weather plugin: fetches current conditions from a
+            WeatherFlow Tempest station via WeatherFlow's cloud REST API
+            (station ID + personal API token, entered in Web Config). Adds a
+            "Weather" card to Web Config. No on-device display screen yet
+            (Web Config only). Disabled by default to keep flash/RAM budget
+            down on builds that don't want it.
+
     config PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
         bool "Enable experimental print control buttons (Pause/Resume/Stop)"
         default n

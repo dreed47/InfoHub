@@ -1315,6 +1315,16 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   if (show_connection_steps) {
     add_badge(&html, "printer-badge", "Printer", printer_group_badge_value, printer_group_badge_class);
   }
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  if (show_connection_steps) {
+    // Static placeholder — weather status is fetched and rendered client-side
+    // (see loadWeatherStatus() in the script below), not server-rendered like
+    // printer's badge, since SetupPortal deliberately has no direct reference
+    // to WeatherPlugin (plugin-isolation principle: each plugin's portal
+    // routes own their own data, no cross-plugin coupling in SetupPortal).
+    add_badge(&html, "weather-badge", "Weather", "Setup", "idle");
+  }
+#endif
   html += "</div>";
   html += "<div class=\"hint-box\"><strong>Note:</strong> ";
   html += show_connection_steps
@@ -2019,6 +2029,29 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     end_collapsible_section();
   }
 
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  // --- Weather plugin section ---
+  // Fields start empty and the badge starts as a static placeholder — filled
+  // in client-side by loadWeatherStatus() after the page loads, since
+  // SetupPortal has no direct reference to WeatherPlugin's data (see the
+  // badge-strip comment above for why).
+  if (wifi_configured) {
+    begin_collapsible_section(
+        "Weather",
+        "WeatherFlow Tempest station via WeatherFlow's cloud API. Enter your station ID and personal API token below.",
+        "Setup", "idle", false, "weather-section-pill");
+    html += "<div class=\"grid-2\">";
+    html += "<div class=\"field\"><label for=\"weather_station_id\">Station ID</label><input id=\"weather_station_id\" value=\"\" autocomplete=\"off\"></div>";
+    html += "<div class=\"field\"><label for=\"weather_api_token\">API Token</label><input id=\"weather_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved token\" autocomplete=\"off\"></div>";
+    html += "</div>";
+    html += "<div class=\"field\"><label for=\"weather_poll_s\">Poll Interval (seconds)</label><input id=\"weather_poll_s\" type=\"number\" min=\"60\" value=\"300\"></div>";
+    html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"weather-detail\">Not configured</span></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"weather-save-button\">Save Weather Settings</button>";
+    html += "<div class=\"micro\">Saves station ID, API token and poll interval, then fetches immediately.</div></div>";
+    end_collapsible_section();
+  }
+#endif
+
   if (wifi_configured) {
     render_wifi_section();
   }
@@ -2705,6 +2738,42 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "arcInputIds.forEach((id)=>{const input=document.getElementById(id);if(!input)return;"
           "input.addEventListener('input',queueArcPreview);input.addEventListener('change',commitArcColors);});";
   html += "updateDisplayRotationControls();updatePortalAccessControls();updateSourceModeControls();updateHealth();healthTimer=setInterval(updateHealth,4000);window.addEventListener('beforeunload',()=>{if(healthTimer){clearInterval(healthTimer);healthTimer=null;}stopCloudFollowup();stopLocalFollowup();});";
+
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  // --- Weather plugin JS ---
+  // Self-contained: fetches/saves through /api/plugins/weather/config only,
+  // no coupling to the printer-plugin JS above.
+  html += "let weatherStationLoaded=false;";
+  html += "async function loadWeatherStatus(){"
+          "try{const response=await fetch('/api/plugins/weather/config',{cache:'no-store'});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(!weatherStationLoaded){const idInput=document.getElementById('weather_station_id');"
+          "if(idInput)idInput.value=body.station_id||'';"
+          "const pollInput=document.getElementById('weather_poll_s');"
+          "if(pollInput)pollInput.value=body.poll_s||300;"
+          "weatherStationLoaded=true;}"
+          "setBadge('weather-badge','Weather',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
+          "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
+          "const detailEl=document.getElementById('weather-detail');"
+          "if(detailEl){if(!body.configured){detailEl.textContent='Not configured';}"
+          "else if(body.last_fetch_ok&&body.has_core_reading){detailEl.textContent='"
+          "'+body.air_temperature_c.toFixed(1)+'\\u00b0C, '+body.relative_humidity_pct.toFixed(0)+'% RH, '"
+          "+body.barometric_pressure_mb.toFixed(1)+' mb';}"
+          "else{detailEl.textContent=body.last_error||'Waiting for first fetch...';}}}"
+          "catch(error){}}";
+  html += "const weatherSaveButton=document.getElementById('weather-save-button');";
+  html += "if(weatherSaveButton){weatherSaveButton.addEventListener('click',async()=>{"
+          "weatherSaveButton.disabled=true;"
+          "try{await fetch('/api/plugins/weather/config',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
+          "station_id:document.getElementById('weather_station_id').value.trim(),"
+          "api_token:document.getElementById('weather_api_token').value,"
+          "poll_s:document.getElementById('weather_poll_s').value})});"
+          "document.getElementById('weather_api_token').value='';"
+          "await loadWeatherStatus();}"
+          "catch(error){}finally{weatherSaveButton.disabled=false;}});}";
+  html += "loadWeatherStatus();setInterval(loadWeatherStatus,5000);";
+#endif
 
   // --- Printer selection JS ---
   // Auto-refresh guard: if the page was rendered while the Cloud binding call

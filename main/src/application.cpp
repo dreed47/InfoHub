@@ -88,6 +88,9 @@ Application::Application()
     printer_plugin_.printer_client().notify_cloud_presence(online);
   });
   plugins_[0] = &printer_plugin_;
+#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+  plugins_[1] = &weather_plugin_;
+#endif
 }
 
 void Application::run() {

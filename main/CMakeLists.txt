@@ -23,6 +23,15 @@ set(PRINTSPHERE_MAIN_REQUIRES
 
 set(PRINTSPHERE_MAIN_PRIV_REQUIRES)
 
+set(PRINTSPHERE_PLUGIN_SRCS)
+if(CONFIG_PRINTSPHERE_PLUGIN_WEATHER)
+    list(APPEND PRINTSPHERE_PLUGIN_SRCS
+        "src/plugins/weather/weather_flow_client.cpp"
+        "src/plugins/weather/weather_plugin.cpp"
+        "src/plugins/weather/weather_plugin_portal.cpp"
+    )
+endif()
+
 if("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1")
     list(APPEND PRINTSPHERE_MAIN_PRIV_REQUIRES
         XPowersLib
@@ -66,6 +75,7 @@ idf_component_register(
         "src/ui.cpp"
         "src/ui_shell.cpp"
         "src/wifi_manager.cpp"
+        ${PRINTSPHERE_PLUGIN_SRCS}
     INCLUDE_DIRS
         "include"
     EMBED_TXTFILES
