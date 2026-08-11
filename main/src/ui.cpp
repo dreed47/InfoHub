@@ -2829,21 +2829,12 @@ esp_err_t Ui::build_dashboard() {
   page1_ = create_page(pager);
   page2_ = create_page(pager);
   page3_ = create_page(pager);
-  page4_ = create_page(pager);
+  plugin_page_ = create_page(pager);
+  enable_touch_bubble(plugin_page_);
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
   enable_touch_bubble(page3_);
-  enable_touch_bubble(page4_);
-
-  // --- Page 4: test page ---
-  {
-    lv_obj_t* name_label = lv_label_create(page4_);
-    set_label_text_if_changed(name_label, "David Reed");
-    lv_obj_set_style_text_font(name_label, dosis40, 0);
-    lv_obj_set_style_text_color(name_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(name_label);
-  }
 
   // --- Page 0: printer selection ---
   page0_title_ = lv_label_create(page0_);
@@ -3425,7 +3416,7 @@ void Ui::register_page_slots() {
   ui_shell_.register_page_slot(kPageIdxMain, &page1_, nullptr);
   ui_shell_.register_page_slot(kPageIdxPreview, &page2_, &preview_page_available_);
   ui_shell_.register_page_slot(kPageIdxCamera, &page3_, &camera_page_available_);
-  ui_shell_.register_page_slot(kPageIdxCredits, &page4_, nullptr);
+  ui_shell_.register_page_slot(kPageIdxPluginPage, &plugin_page_, &plugin_page_enabled_);
 }
 
 lv_obj_t* Ui::page_object(int page) const { return ui_shell_.page_object(page); }

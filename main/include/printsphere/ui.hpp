@@ -24,15 +24,14 @@ class Ui {
   //   kPageIdxMain:                 main dashboard
   //   kPageIdxPreview:              print preview
   //   kPageIdxCamera:               camera feed
-  //   kPageIdxCredits:              test page (name card)
   static constexpr int kPageIdxPrinterSelect = 0;
   static constexpr int kPageIdxAmsFirst = 1;
   static constexpr int kPageIdxAmsLast = kPageIdxAmsFirst + kMaxAmsUnits - 1;
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxCredits = kPageIdxCamera + 1;
-  static constexpr int kPageIdxLast = kPageIdxCredits;
+  static constexpr int kPageIdxPluginPage = kPageIdxCamera + 1;
+  static constexpr int kPageIdxLast = kPageIdxPluginPage;
 
   void set_display_rotation(DisplayRotation rotation);
   void set_display_tilt_deci_deg(int deci_deg);
@@ -92,6 +91,13 @@ class Ui {
   void update_printer_cards(const std::vector<PrinterCardInfo>& cards);
   int consume_printer_switch_request();
   void request_wake_display();
+
+  // The one reserved generic plugin-page slot (kPageIdxPluginPage) — see the
+  // comment on that constant. A plugin calls build_screen() once with this
+  // container during Application startup, then drives visibility in the
+  // pager via set_plugin_page_enabled() from its own update_ui().
+  lv_obj_t* plugin_page_container() const { return plugin_page_; }
+  void set_plugin_page_enabled(bool enabled) { plugin_page_enabled_ = enabled; }
 
  private:
   // Phase 6/9 (plugin-architecture extraction, see CLAUDE.md "Ui changes
@@ -223,7 +229,8 @@ class Ui {
   lv_obj_t* page1_ = nullptr;
   lv_obj_t* page2_ = nullptr;
   lv_obj_t* page3_ = nullptr;
-  lv_obj_t* page4_ = nullptr;
+  lv_obj_t* plugin_page_ = nullptr;
+  bool plugin_page_enabled_ = false;  // starts disabled — pager skips it until a plugin turns it on
   lv_obj_t* status_arc_ = nullptr;
   lv_obj_t* progress_label_ = nullptr;
   lv_obj_t* battery_icon_label_ = nullptr;

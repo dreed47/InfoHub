@@ -41,8 +41,13 @@ class UiShell {
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxCredits = kPageIdxCamera + 1;
-  static constexpr int kPageIdxLast = kPageIdxCredits;
+  // One generic reserved slot for a plugin's own on-device screen (see
+  // Ui::plugin_page_container()/set_plugin_page_enabled()). Deliberately not
+  // named after any specific plugin — Ui stays plugin-agnostic. Single slot
+  // for now since there's exactly one real consumer (weather); growing this
+  // to a pool is a follow-up once a second plugin wants a screen too.
+  static constexpr int kPageIdxPluginPage = kPageIdxCamera + 1;
+  static constexpr int kPageIdxLast = kPageIdxPluginPage;
 
   // --- Page registry: page_enabled()/page_object() table, see Phase 6 ---
   void register_page_slot(int index, lv_obj_t* const* object, const bool* enabled_flag);
