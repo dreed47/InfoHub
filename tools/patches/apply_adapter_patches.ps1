@@ -1,4 +1,4 @@
-# Apply PrintSphere safety patches to managed_components/espressif__esp_lvgl_adapter.
+# Apply InfoHub safety patches to managed_components/espressif__esp_lvgl_adapter.
 #
 # esp_lvgl_adapter 0.6.0 includes the upstream bounded TE-vsync wait and
 # buffer-switch synchronization updates, but the LVGL v9 GPIO-TE SPI flush still
@@ -51,7 +51,7 @@ function Apply-Patch {
 }
 
 $bridgePath = Join-Path $AdapterRoot 'src/display/bridge/v9/lvgl_bridge_v9.c'
-$helperMarker = 'PrintSphere local patch: %s TX-done notify timed out'
+$helperMarker = 'InfoHub local patch: %s TX-done notify timed out'
 $helperFind = @'
     return row_bytes;
 }
@@ -72,7 +72,7 @@ static bool display_bridge_v9_wait_tx_done(esp_lv_adapter_display_bridge_v9_t *i
         return true;
     }
 
-    ESP_LOGW(TAG, "PrintSphere local patch: %s TX-done notify timed out (%ums) -- releasing LVGL flush",
+    ESP_LOGW(TAG, "InfoHub local patch: %s TX-done notify timed out (%ums) -- releasing LVGL flush",
              context ? context : "display", (unsigned)pdTICKS_TO_MS(timeout));
     if (impl && impl->cfg.te_ctx) {
         esp_lv_adapter_te_sync_record_tx_done(impl->cfg.te_ctx);

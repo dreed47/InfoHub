@@ -1,4 +1,4 @@
-#include "printsphere/plugins/printer/bambu_cloud_client.hpp"
+#include "infohub/plugins/printer/bambu_cloud_client.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "cJSON.h"
-#include "printsphere/plugins/printer/bambu_status.hpp"
-#include "printsphere/plugins/printer/error_lookup.hpp"
-#include "printsphere/plugins/printer/status_resolver.hpp"
+#include "infohub/plugins/printer/bambu_status.hpp"
+#include "infohub/plugins/printer/error_lookup.hpp"
+#include "infohub/plugins/printer/status_resolver.hpp"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -28,11 +28,11 @@
 #include "esp_wifi.h"
 #include "mbedtls/base64.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.cloud";
+constexpr char kTag[] = "infohub.cloud";
 constexpr char kLoginPath[] = "/v1/user-service/user/login";
 constexpr char kTfaLoginPath[] = "/api/sign-in/tfa";
 constexpr char kEmailCodePath[] = "/v1/user-service/user/sendemail/code";
@@ -981,7 +981,7 @@ void append_unique_hms_code(std::vector<uint64_t>* codes, uint64_t hms_code) {
     return;
   }
   // Filter out specific suppressed HMS codes at extraction level.
-  if (printsphere::is_hms_suppressed(hms_code)) {
+  if (infohub::is_hms_suppressed(hms_code)) {
     return;
   }
   if (std::find(codes->begin(), codes->end(), hms_code) == codes->end()) {
@@ -2742,7 +2742,7 @@ bool BambuCloudClient::ensure_mqtt_client_started() {
     return true;
   }
 
-  mqtt_client_id_ = "printsphere-cloud-" + std::to_string(static_cast<unsigned int>(esp_random()));
+  mqtt_client_id_ = "infohub-cloud-" + std::to_string(static_cast<unsigned int>(esp_random()));
   mqtt_report_topic_ = desired_report_topic;
   mqtt_request_topic_ = desired_request_topic;
 
@@ -4466,7 +4466,7 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
     }
     esp_http_client_set_header(client, "Accept", "image/png,image/*;q=0.9,*/*;q=0.1");
     esp_http_client_set_header(client, "Accept-Encoding", "identity");
-    esp_http_client_set_header(client, "User-Agent", "PrintSphere/1.0");
+    esp_http_client_set_header(client, "User-Agent", "InfoHub/1.0");
 
     perform_err = esp_http_client_perform(client);
     status_code = esp_http_client_get_status_code(client);
@@ -4539,7 +4539,7 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
   if (range_client != nullptr) {
     esp_http_client_set_header(range_client, "Accept", "image/png,image/*;q=0.9,*/*;q=0.1");
     esp_http_client_set_header(range_client, "Accept-Encoding", "identity");
-    esp_http_client_set_header(range_client, "User-Agent", "PrintSphere/1.0");
+    esp_http_client_set_header(range_client, "User-Agent", "InfoHub/1.0");
   }
 
   for (size_t offset = 0; !range_failed && range_client != nullptr && offset < kMaxPreviewBytes;
@@ -4633,7 +4633,7 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
 
   const std::string request =
       "GET " + parsed.target + " HTTP/1.1\r\nHost: " + parsed.host +
-      "\r\nUser-Agent: PrintSphere/1.0\r\nAccept: image/png,image/*;q=0.9,*/*;q=0.1\r\n"
+      "\r\nUser-Agent: InfoHub/1.0\r\nAccept: image/png,image/*;q=0.9,*/*;q=0.1\r\n"
       "Accept-Encoding: identity\r\nConnection: close\r\n\r\n";
 
   size_t written_total = 0;
@@ -5400,4 +5400,4 @@ const cJSON* BambuCloudClient::child_array(const cJSON* object, const char* key)
   return cJSON_IsArray(item) ? item : nullptr;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

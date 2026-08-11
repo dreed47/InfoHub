@@ -1,8 +1,8 @@
-#include "printsphere/ui_toolkit.hpp"
+#include "infohub/ui_toolkit.hpp"
 
 #include <cstring>
 
-namespace printsphere {
+namespace infohub {
 
 void make_transparent(lv_obj_t* obj) {
   lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, 0);
@@ -52,4 +52,4 @@ void set_label_text_if_changed(lv_obj_t* label, const std::string& text) {
   set_label_text_if_changed(label, text.c_str());
 }
 
-}  // namespace printsphere
+}  // namespace infohub

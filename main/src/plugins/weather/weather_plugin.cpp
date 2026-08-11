@@ -1,32 +1,32 @@
-#include "printsphere/plugins/weather/weather_plugin.hpp"
+#include "infohub/plugins/weather/weather_plugin.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 
 #include "esp_log.h"
-#include "printsphere/ui.hpp"
+#include "infohub/ui.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
 // Same fonts ui.cpp uses for its own pages (include/font/dosis_*.c) — plain C
 // objects, declared the same way ui.cpp does: extern "C", at file scope (not
-// inside namespace printsphere, which would give them C++ mangled names that
+// inside namespace infohub, which would give them C++ mangled names that
 // don't match the real symbols).
 extern "C" {
 extern const lv_font_t dosis_20;
 extern const lv_font_t dosis_40;
 }
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.weather";
+constexpr char kTag[] = "infohub.weather";
 constexpr char kPluginNs[] = "weather";
 }  // namespace
 
@@ -150,4 +150,4 @@ void WeatherPlugin::update_ui() {
   bsp_display_unlock();
 }
 
-}  // namespace printsphere
+}  // namespace infohub

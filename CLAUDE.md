@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-PrintSphere: ESP32-S3 firmware (C17/C++17, ESP-IDF v5.5.4, LVGL v9.5.0) for a round/square touch display that shows Bambu Lab 3D printer status. Talks to printers via Bambu Cloud, local MQTT, or both ("hybrid" mode). Two hardware variants share one codebase, selected at CMake configure time.
+InfoHub: ESP32-S3 firmware (C17/C++17, ESP-IDF v5.5.4, LVGL v9.5.0) for a round/square touch display that shows Bambu Lab 3D printer status. Talks to printers via Bambu Cloud, local MQTT, or both ("hybrid" mode). Two hardware variants share one codebase, selected at CMake configure time.
 
 ## Direction: generic plugin platform (goal, not yet built)
 
-Long-term goal: turn PrintSphere from single-purpose Bambu display into generic info-display platform. Printer status becomes one "plugin" among many (weather, stocks, other data sources), each plugged into shared display/config/network/portal scaffolding.
+Long-term goal: turn InfoHub from single-purpose Bambu display into generic info-display platform. Printer status becomes one "plugin" among many (weather, stocks, other data sources), each plugged into shared display/config/network/portal scaffolding.
 
 Current codebase (architecture below) is Bambu-specific and monolithic: `Application` hardcodes printer/cloud/camera clients as fixed members, `PrinterSnapshot`/`PrinterStateStore` is the one-and-only shared state contract, `Ui` renders printer screens directly, `SetupPortal` hardcodes printer/Wi-Fi/cloud config pages. None of this is decoupled into a plugin interface yet — treat the architecture section as "what exists today," not "what a plugin author targets."
 
@@ -20,7 +20,7 @@ ESP32-S3 has no OS-level dynamic loading, so "plugin" means compile-time unit (o
 
 ```cpp
 // plugin.hpp
-namespace printsphere {
+namespace infohub {
 
 struct PluginContext {
   ConfigStore& config_store;
@@ -53,7 +53,7 @@ class Plugin {
   virtual void save_config() = 0;
 };
 
-}  // namespace printsphere
+}  // namespace infohub
 ```
 
 Registration is compile-time, one file, list grows as plugins are added:
@@ -61,16 +61,16 @@ Registration is compile-time, one file, list grows as plugins are added:
 ```cpp
 // plugin_registry.cpp
 std::array<Plugin*, kMaxPlugins> registered_plugins = {
-#if CONFIG_PRINTSPHERE_PLUGIN_PRINTER
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   &g_printer_plugin,
 #endif
-#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+#if CONFIG_INFOHUB_PLUGIN_WEATHER
   &g_weather_plugin,
 #endif
 };
 ```
 
-Each plugin gated by its own Kconfig bool → controls flash/RAM budget per build, same pattern as `PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL` today.
+Each plugin gated by its own Kconfig bool → controls flash/RAM budget per build, same pattern as `INFOHUB_EXPERIMENTAL_PRINT_CONTROL` today.
 
 **What has to change to support this:**
 
@@ -90,7 +90,7 @@ Each plugin gated by its own Kconfig bool → controls flash/RAM budget per buil
 
 ### ConfigStore changes sketch (design only, not implemented)
 
-Grounded in current code: single NVS namespace `"printsphere"`, flat abbreviated keys, `save_string`/`load_string` are already generic primitives underneath every typed getter. Indexed keys (`prn_%u_%s` + `prn_count`) already exist for multi-instance printer profiles. Audio blobs live on LittleFS at `/sounds`, not NVS.
+Grounded in current code: single NVS namespace `"infohub"`, flat abbreviated keys, `save_string`/`load_string` are already generic primitives underneath every typed getter. Indexed keys (`prn_%u_%s` + `prn_count`) already exist for multi-instance printer profiles. Audio blobs live on LittleFS at `/sounds`, not NVS.
 
 **Hard constraint:** ESP-IDF NVS caps both namespace and key strings at 15 chars. A dotted-key scheme like `"plugin.weather.city"` breaks immediately. Fix: per-plugin NVS namespace (`nvs_open("psp_weather", ...)`) instead of key-prefixing — plugin id must fit the budget, enforced at plugin registration.
 
@@ -177,7 +177,7 @@ Each plugin owns its own LVGL object members and widget-building code (today's `
 - **`apply_snapshot(PrinterSnapshot)`** — today the single global update entry called from `Application`. Becomes: `Application` calls `plugin->update_ui()` per plugin per loop tick (per the plugin interface sketch above); `UiShell` no longer knows about `PrinterSnapshot` at all.
 - **`print_active` driving power-save** — `update_power_save(on_battery, keep_awake, print_active)` bakes a printer concept into core dimming policy. Replace with `plugin->wants_awake() const` on the `Plugin` interface, queried across all plugins by `Application` and OR'd into the `any_plugin_busy` param.
 - **`is_page2_active()` / `is_camera_page_active()`** — printer-specific query methods on `Ui`'s public API, consumed by `Application`/`PrinterClient` for MQTT-handoff and camera-fetch gating. Generalize to `UiShell::is_plugin_page_active(plugin_id, local_idx)`; printer plugin calls it with its own id instead of `Ui` hardcoding the concept.
-- **Printer-selector (`page0_`, `PrinterCardInfo`, `update_printer_cards()`)** — this is printer-profile multi-instance UI, not core chrome. Becomes the printer plugin's own first page, built via its `build_screen()`, not a permanent fixture of every PrintSphere build (a build with printer plugin disabled shouldn't show it).
+- **Printer-selector (`page0_`, `PrinterCardInfo`, `update_printer_cards()`)** — this is printer-profile multi-instance UI, not core chrome. Becomes the printer plugin's own first page, built via its `build_screen()`, not a permanent fixture of every InfoHub build (a build with printer plugin disabled shouldn't show it).
 - **Shared widget primitives** — AMS tray pills, status arc, labels use a consistent style/font set built once today inside `Ui`. Pull that into a small shared `ui_toolkit.hpp` (fonts, colors, common widget constructors) plugins call from `build_screen()`, so each plugin isn't reimplementing LVGL styling from scratch.
 
 **Open questions:**
@@ -360,7 +360,7 @@ This module doesn't get generalized — it gets relocated. `ErrorLookupDomain`, 
 
 **Open questions:**
 
-- How big is `error_lookup.tsv` compiled-in — worth checking before deciding conditional-embed is actually worth the build-system complexity for a printer-optional build, versus just always including it since PrintSphere without any printer plugin is a fairly odd configuration anyway.
+- How big is `error_lookup.tsv` compiled-in — worth checking before deciding conditional-embed is actually worth the build-system complexity for a printer-optional build, versus just always including it since InfoHub without any printer plugin is a fairly odd configuration anyway.
 - Does `AudioNotifier::register_event()` need collision detection if two plugins pick the same `stable_key` by accident, or is "plugin ids + event key" (e.g. `printer.print_started`) the actual namespaced key to avoid relying on authors picking unique names?
 
 ### WifiManager and network layer changes sketch (design only, not implemented)
@@ -432,12 +432,12 @@ Requires ESP-IDF v5.5.4 environment activated (`idf.py` on PATH). Every build mu
 
 ```bash
 # AMOLED 1.75 variant
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 reconfigure build
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p <port> build flash monitor
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 reconfigure build
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 -p <port> build flash monitor
 
 # LCD 2.8C variant
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c reconfigure build
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p <port> build flash monitor
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c reconfigure build
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p <port> build flash monitor
 ```
 
 Run `reconfigure` (not `fullclean`) after any CMake/Kconfig/dependency change. There is no unit test suite — verification is build + flash + on-device monitor.
@@ -451,32 +451,32 @@ python tools/package_initial_flash.py --build-dir build-amoled_1_75 --release-ro
 python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version vX.Y.Z-2.8c
 ```
 
-`printsphere_full.bin` = merged bootloader+partitions+app, for initial/empty-device flash at `0x0`. `printsphere_ota.bin` = app-only, installed through the running device's Web Config so ESP-IDF writes it to the inactive OTA slot and preserves NVS config. Never flash an OTA image as a full image. Full details: `docs/Build/README.md`.
+`infohub_full.bin` = merged bootloader+partitions+app, for initial/empty-device flash at `0x0`. `infohub_ota.bin` = app-only, installed through the running device's Web Config so ESP-IDF writes it to the inactive OTA slot and preserves NVS config. Never flash an OTA image as a full image. Full details: `docs/Build/README.md`.
 
 ## Hardware variant mechanism
 
-`PRINTSPHERE_HW_VARIANT` (CMake cache var, `lcd_2_8c` default or `amoled_1_75`) drives, in root `CMakeLists.txt`:
+`INFOHUB_HW_VARIANT` (CMake cache var, `lcd_2_8c` default or `amoled_1_75`) drives, in root `CMakeLists.txt`:
 
 - which BSP component builds (`esp32_s3_touch_lcd_2_8c` vs `esp32_s3_touch_amoled_1_75`, under `components/`)
-- a compile define (`PRINTSPHERE_HW_VARIANT_LCD_2_8C=1` / `PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1`) that gates hardware-specific code, e.g. `main/include/printsphere/board_config.hpp` (GPIO pins, display size) and the AXP2101 PMU code path (AMOLED only, via `components/XPowersLib`)
+- a compile define (`INFOHUB_HW_VARIANT_LCD_2_8C=1` / `INFOHUB_HW_VARIANT_AMOLED_1_75=1`) that gates hardware-specific code, e.g. `main/include/infohub/board_config.hpp` (GPIO pins, display size) and the AXP2101 PMU code path (AMOLED only, via `components/XPowersLib`)
 - which release directory packaging writes to
 
-`main/CMakeLists.txt` conditionally adds `PRIV_REQUIRES` per variant (XPowersLib+BSP for AMOLED, esp_adc+BSP for LCD). When adding hardware-specific code, gate it with `#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)` / `#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)`, following `board_config.hpp`'s pattern.
+`main/CMakeLists.txt` conditionally adds `PRIV_REQUIRES` per variant (XPowersLib+BSP for AMOLED, esp_adc+BSP for LCD). When adding hardware-specific code, gate it with `#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)` / `#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)`, following `board_config.hpp`'s pattern.
 
 ## Architecture
 
-Single FreeRTOS task (`printsphere_app`, `app_main.cpp`) runs `printsphere::Application::run()` (`main/src/application.cpp`), which owns every subsystem and drives them from one loop — most components are not independently threaded except where noted:
+Single FreeRTOS task (`infohub_app`, `app_main.cpp`) runs `infohub::Application::run()` (`main/src/application.cpp`), which owns every subsystem and drives them from one loop — most components are not independently threaded except where noted:
 
 - **`ConfigStore`** (`config_store.{hpp,cpp}`) — NVS + LittleFS-backed settings: Wi-Fi/cloud credentials, printer profiles (up to `kMaxPrinterProfiles`), display/battery/audio/color config. All reads/writes go through this; printer-profile mutation is mutex-serialized because both the main loop and the setup-portal HTTP task can touch it.
 - **`WifiManager`** — station Wi-Fi connect/reconnect.
 - **`BambuCloudClient`** (`bambu_cloud_client.{hpp,cpp}`, largest file at ~5.4k lines) — Bambu Cloud auth (incl. 2FA/email-code) and cloud MQTT status/preview feed.
-- **`PrinterClient`** (`printer_client.{hpp,cpp}`, ~3k lines) — local MQTT client talking directly to the printer (`device/<serial>/report` / `.../request`) over TLS, on its own task (`task_loop`/`task_entry`) synchronized via atomics + a runtime-state mutex, not the FreeRTOS caller's context. Parses Bambu's JSON status reports into `PrinterClient::LocalPrinterRuntimeState`, then republishes as a `PrinterSnapshot`. Also handles chamber-light and print pause/resume/stop commands (see `PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL` Kconfig — Bambu printers reject unsigned print-control MQTT commands from third-party firmware; this is a deliberately experimental/off-by-default feature with legal-exposure notes in `main/Kconfig.projbuild`).
+- **`PrinterClient`** (`printer_client.{hpp,cpp}`, ~3k lines) — local MQTT client talking directly to the printer (`device/<serial>/report` / `.../request`) over TLS, on its own task (`task_loop`/`task_entry`) synchronized via atomics + a runtime-state mutex, not the FreeRTOS caller's context. Parses Bambu's JSON status reports into `PrinterClient::LocalPrinterRuntimeState`, then republishes as a `PrinterSnapshot`. Also handles chamber-light and print pause/resume/stop commands (see `INFOHUB_EXPERIMENTAL_PRINT_CONTROL` Kconfig — Bambu printers reject unsigned print-control MQTT commands from third-party firmware; this is a deliberately experimental/off-by-default feature with legal-exposure notes in `main/Kconfig.projbuild`).
 - **`status_resolver`** (`status_resolver.{hpp,cpp}`) — `merge_status_sources()` combines the local `PrinterSnapshot` and cloud `BambuCloudSnapshot` per `SourceMode` (`kCloudOnly`/`kLocalOnly`/`kHybrid`) into the single `PrinterSnapshot` the UI renders; `resolve_ui_state()` derives UI-facing status/stage strings. This is where hybrid-mode source arbitration logic lives — read it before changing anything about which source "wins" for a given field.
 - **`PrinterStateStore`** (in `printer_state.hpp`) — mutex-guarded holder of the current `PrinterSnapshot`, the shared data contract between backend and UI (connection/lifecycle state, temps, progress, AMS/filament info, camera/preview blobs, HMS error codes, battery, Wi-Fi, per-field `FieldSource` provenance).
 - **`Ui`** (`ui.{hpp,cpp}`, ~4k lines) — LVGL screens/widgets, polls `PrinterSnapshot` and renders it; also owns display rotation/tilt and dimming/screen-off policy.
 - **`P1sCameraClient`** — local JPEG snapshot fetching (only for models with `camera_jpeg_socket` capability: A1/A1 Mini/A2L/P1P/P1S). RTSP-only models (P2S, H2 family, X1 family, X2D) cannot be decoded on-device; see `printer_model_has_rtsp_camera`.
 - **`SetupPortal`** (`setup_portal.{hpp,cpp}`, ~5.1k lines) — on-device HTTP server ("Web Config"): Wi-Fi scan/config, cloud+local printer connection setup, all display/battery/audio settings, firmware OTA (file upload or URL), and PIN-gated access (`PortalAccessSnapshot`/`request_unlock_pin`). This is the primary user-facing config surface — most new settings need a `ConfigStore` field + a portal HTTP handler + (if runtime-visible) an `Application`/`Ui` wire-up.
-- **`SerialProvisioner`** — USB-serial Wi-Fi provisioning path used by the web installer (`flash/index.html`) as an alternative to the `PrintSphere-Setup` fallback AP.
+- **`SerialProvisioner`** — USB-serial Wi-Fi provisioning path used by the web installer (`flash/index.html`) as an alternative to the `InfoHub-Setup` fallback AP.
 - **`PmuManager`** — battery/USB power state (AXP2101 on AMOLED; ADC-based on LCD 2.8C).
 - **`AudioNotifier`** — per-event (print started/finished/error/HMS/paused/filament-change/reconnect/click) WAV-backed sound notifications, PCM stored on LittleFS via `ConfigStore`.
 - **`error_lookup`** — HMS/print-error code → human string, backed by `main/include/error_lookup/error_lookup.tsv` embedded into the binary via `EMBED_TXTFILES` (not a filesystem partition).
@@ -487,7 +487,7 @@ Single FreeRTOS task (`printsphere_app`, `app_main.cpp`) runs `printsphere::Appl
 
 ## Conventions
 
-- New source files go in `main/src/`, headers in `main/include/printsphere/`; every new `.cpp` must be added to the `SRCS` list in `main/CMakeLists.txt`.
+- New source files go in `main/src/`, headers in `main/include/infohub/`; every new `.cpp` must be added to the `SRCS` list in `main/CMakeLists.txt`.
 - Warnings are treated as significant: build uses `-Wall -Wextra`.
-- Debug-only logging: gate with `#ifdef PRINTSPHERE_DEBUG_BUILD` (auto-set when `PRINTSPHERE_RELEASE_VERSION` contains `-debug`/`_debug`); `debug_log_buffer.{hpp,cpp}` is the in-RAM ring buffer this feeds.
+- Debug-only logging: gate with `#ifdef INFOHUB_DEBUG_BUILD` (auto-set when `INFOHUB_RELEASE_VERSION` contains `-debug`/`_debug`); `debug_log_buffer.{hpp,cpp}` is the in-RAM ring buffer this feeds.
 - `managed_components/` and `components/*` (BSPs, XPowersLib) are vendored/generated dependencies — don't hand-edit unless intentionally patching a vendored bug (see `tools/patches/`).

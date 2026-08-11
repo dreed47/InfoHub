@@ -1,8 +1,8 @@
-#include "printsphere/plugin_registry.hpp"
+#include "infohub/plugin_registry.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 // No plugins registered yet — see plugin_registry.hpp.
 std::array<Plugin*, kMaxPlugins> registered_plugins{};
 
-}  // namespace printsphere
+}  // namespace infohub

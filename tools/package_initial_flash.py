@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default="release/initial/printsphere_full.bin",
+        default="release/initial/infohub_full.bin",
         help="Output path for the merged firmware image",
     )
     parser.add_argument(
@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ota-output",
-        default="release/ota/printsphere_ota.bin",
+        default="release/ota/infohub_ota.bin",
         help="Output path for the OTA-flashable app-only firmware image",
     )
     parser.add_argument(
@@ -132,22 +132,22 @@ def main() -> int:
 
     # Resolve output paths: --debug and --beta both go to release/beta/
     if args.debug or args.beta:
-        output_path = (release_root / "beta" / "printsphere_full.bin").resolve()
-        ota_output_path = (release_root / "beta" / "printsphere_ota.bin").resolve()
+        output_path = (release_root / "beta" / "infohub_full.bin").resolve()
+        ota_output_path = (release_root / "beta" / "infohub_ota.bin").resolve()
     else:
-        default_output = Path("release/initial/printsphere_full.bin")
-        default_ota_output = Path("release/ota/printsphere_ota.bin")
+        default_output = Path("release/initial/infohub_full.bin")
+        default_ota_output = Path("release/ota/infohub_ota.bin")
 
         output_arg = Path(args.output)
         ota_output_arg = Path(args.ota_output)
 
         if output_arg == default_output:
-            output_path = (release_root / "initial" / "printsphere_full.bin").resolve()
+            output_path = (release_root / "initial" / "infohub_full.bin").resolve()
         else:
             output_path = output_arg.resolve()
 
         if ota_output_arg == default_ota_output:
-            ota_output_path = (release_root / "ota" / "printsphere_ota.bin").resolve()
+            ota_output_path = (release_root / "ota" / "infohub_ota.bin").resolve()
         else:
             ota_output_path = ota_output_arg.resolve()
 

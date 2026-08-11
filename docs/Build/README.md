@@ -1,6 +1,6 @@
-# Building PrintSphere
+# Building InfoHub
 
-This document is for developers and advanced users who want to clone, build, flash or package PrintSphere themselves. Most users should use the [PrintSphere Web Installer](https://cptkirki.github.io/PrintSphere/flash/).
+This document is for developers and advanced users who want to clone, build, flash or package InfoHub themselves. Most users should use the [InfoHub Web Installer](https://cptkirki.github.io/InfoHub/flash/).
 
 ## Requirements
 
@@ -16,8 +16,8 @@ The project uses C17, C++17 and LVGL `v9.5.0`.
 ## Clone the repository
 
 ```powershell
-git clone https://github.com/cptkirki/PrintSphere.git
-cd PrintSphere
+git clone https://github.com/dreed47/InfoHub.git
+cd InfoHub
 ```
 
 Activate the ESP-IDF environment before running `idf.py`. On Windows, use the ESP-IDF PowerShell or command prompt installed with ESP-IDF.
@@ -36,13 +36,13 @@ Do not reuse one variant's build directory for the other variant.
 ## Build the AMOLED 1.75 variant
 
 ```powershell
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 reconfigure build
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 reconfigure build
 ```
 
 Build, flash and open the serial monitor:
 
 ```powershell
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 build flash monitor
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 -p COM9 build flash monitor
 ```
 
 Replace `COM9` with the correct port on your system.
@@ -50,13 +50,13 @@ Replace `COM9` with the correct port on your system.
 ## Build the LCD 2.8C variant
 
 ```powershell
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c reconfigure build
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c reconfigure build
 ```
 
 Build, flash and open the serial monitor:
 
 ```powershell
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 build flash monitor
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p COM7 build flash monitor
 ```
 
 Replace `COM7` with the correct port on your system.
@@ -66,15 +66,15 @@ Replace `COM7` with the correct port on your system.
 AMOLED 1.75:
 
 ```powershell
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 flash
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 -p COM9 monitor
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 -p COM9 flash
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 -p COM9 monitor
 ```
 
 LCD 2.8C:
 
 ```powershell
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 flash
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c -p COM7 monitor
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p COM7 flash
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p COM7 monitor
 ```
 
 ## Package both release variants
@@ -89,8 +89,8 @@ The script creates the four current release images plus versioned archive copies
 
 | Hardware | Initial USB image | OTA image |
 | --- | --- | --- |
-| AMOLED 1.75 | `release/initial/printsphere_full.bin` | `release/ota/printsphere_ota.bin` |
-| LCD 2.8C | `release/2.8c/initial/printsphere_full.bin` | `release/2.8c/ota/printsphere_ota.bin` |
+| AMOLED 1.75 | `release/initial/infohub_full.bin` | `release/ota/infohub_ota.bin` |
+| LCD 2.8C | `release/2.8c/initial/infohub_full.bin` | `release/2.8c/ota/infohub_ota.bin` |
 
 Versioned copies are stored below the corresponding `archive/` directories.
 
@@ -110,8 +110,8 @@ python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root 
 
 ## Initial image versus OTA image
 
-- `printsphere_full.bin` is a merged image containing the bootloader, partition table, OTA data and application. Use it for an empty device, recovery or a partition-layout migration.
-- `printsphere_ota.bin` contains only the application. Install it through the running device's Web Config so ESP-IDF writes it to the inactive OTA slot and preserves NVS configuration.
+- `infohub_full.bin` is a merged image containing the bootloader, partition table, OTA data and application. Use it for an empty device, recovery or a partition-layout migration.
+- `infohub_ota.bin` contains only the application. Install it through the running device's Web Config so ESP-IDF writes it to the inactive OTA slot and preserves NVS configuration.
 
 Do not use an OTA image as a full image at address `0x0`.
 
@@ -122,13 +122,13 @@ Devices on v1.5.x or older require one full v1.6.x flash because v1.6 changed th
 AMOLED 1.75:
 
 ```powershell
-esptool.exe --chip esp32s3 --port COM9 write_flash 0x0 release/initial/printsphere_full.bin
+esptool.exe --chip esp32s3 --port COM9 write_flash 0x0 release/initial/infohub_full.bin
 ```
 
 LCD 2.8C:
 
 ```powershell
-esptool.exe --chip esp32s3 --port COM7 write_flash 0x0 release/2.8c/initial/printsphere_full.bin
+esptool.exe --chip esp32s3 --port COM7 write_flash 0x0 release/2.8c/initial/infohub_full.bin
 ```
 
 The merged image already contains the bootloader and partition table.
@@ -138,8 +138,8 @@ The merged image already contains the bootloader and partition table.
 Use `reconfigure` first when CMake settings, dependencies or hardware options change:
 
 ```powershell
-idf.py -B build-amoled_1_75 -DPRINTSPHERE_HW_VARIANT=amoled_1_75 reconfigure
-idf.py -B build-lcd_2_8c -DPRINTSPHERE_HW_VARIANT=lcd_2_8c reconfigure
+idf.py -B build-amoled_1_75 -DINFOHUB_HW_VARIANT=amoled_1_75 reconfigure
+idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c reconfigure
 ```
 
 `fullclean` is normally unnecessary. If a build cache is genuinely broken, remove or recreate only the affected variant's build directory.

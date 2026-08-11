@@ -2,17 +2,17 @@
 // way printer_plugin_portal.cpp splits off PrinterPlugin's routes — keeps
 // HTTP handler code separate from tick()/init() lifecycle code.
 
-#include "printsphere/plugins/weather/weather_plugin.hpp"
+#include "infohub/plugins/weather/weather_plugin.hpp"
 
 #include <cstdlib>
 
 #include "cJSON.h"
-#include "printsphere/config_store.hpp"
-#include "printsphere/portal_shared.hpp"
-#include "printsphere/setup_portal.hpp"
-#include "printsphere/ui.hpp"
+#include "infohub/config_store.hpp"
+#include "infohub/portal_shared.hpp"
+#include "infohub/setup_portal.hpp"
+#include "infohub/ui.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 constexpr char kPluginNs[] = "weather";
@@ -170,4 +170,4 @@ void WeatherPlugin::register_portal_routes(httpd_handle_t server) {
   httpd_register_uri_handler(server, &enabled_uri);
 }
 
-}  // namespace printsphere
+}  // namespace infohub

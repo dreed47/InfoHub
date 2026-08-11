@@ -1,6 +1,6 @@
-#include "printsphere/debug_log_buffer.hpp"
+#include "infohub/debug_log_buffer.hpp"
 
-#ifdef PRINTSPHERE_DEBUG_BUILD
+#ifdef INFOHUB_DEBUG_BUILD
 
 #include <algorithm>
 #include <cctype>
@@ -14,11 +14,11 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
-#ifndef PRINTSPHERE_RELEASE_VERSION
-#define PRINTSPHERE_RELEASE_VERSION "dev"
+#ifndef INFOHUB_RELEASE_VERSION
+#define INFOHUB_RELEASE_VERSION "dev"
 #endif
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
@@ -237,8 +237,8 @@ void debug_log_init() {
     static const char banner[] =
         "\n"
         "===========================================\n"
-        "  PrintSphere Debug Log\n"
-        "  FW : " PRINTSPHERE_RELEASE_VERSION "\n"
+        "  InfoHub Debug Log\n"
+        "  FW : " INFOHUB_RELEASE_VERSION "\n"
         "  Built: " __DATE__ " " __TIME__ "\n"
         "===========================================\n"
         "\n";
@@ -272,6 +272,6 @@ size_t debug_log_end_offset() {
   return g_write_total;
 }
 
-}  // namespace printsphere
+}  // namespace infohub
 
-#endif  // PRINTSPHERE_DEBUG_BUILD
+#endif  // INFOHUB_DEBUG_BUILD

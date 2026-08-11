@@ -1,6 +1,6 @@
-menu "PrintSphere"
+menu "InfoHub"
 
-    config PRINTSPHERE_PLUGIN_WEATHER
+    config INFOHUB_PLUGIN_WEATHER
         bool "Enable weather plugin (WeatherFlow Tempest cloud API)"
         default n
         help
@@ -11,7 +11,7 @@ menu "PrintSphere"
             (Web Config only). Disabled by default to keep flash/RAM budget
             down on builds that don't want it.
 
-    config PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
+    config INFOHUB_EXPERIMENTAL_PRINT_CONTROL
         bool "Enable experimental print control buttons (Pause/Resume/Stop)"
         default n
         help

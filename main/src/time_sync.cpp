@@ -1,4 +1,4 @@
-#include "printsphere/time_sync.hpp"
+#include "infohub/time_sync.hpp"
 
 #include <array>
 #include <cstdlib>
@@ -9,10 +9,10 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 
-namespace printsphere::time_sync {
+namespace infohub::time_sync {
 
 namespace {
-constexpr char kTag[] = "printsphere.time";
+constexpr char kTag[] = "infohub.time";
 
 bool g_sntp_started = false;
 std::string g_current_iana{};
@@ -149,4 +149,4 @@ void start_sntp_if_needed() {
   ESP_LOGI(kTag, "SNTP started (pool.ntp.org)");
 }
 
-}  // namespace printsphere::time_sync
+}  // namespace infohub::time_sync

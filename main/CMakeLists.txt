@@ -1,4 +1,4 @@
-set(PRINTSPHERE_MAIN_REQUIRES
+set(INFOHUB_MAIN_REQUIRES
     app_update
     esp_driver_uart
     esp_driver_usb_serial_jtag
@@ -21,24 +21,24 @@ set(PRINTSPHERE_MAIN_REQUIRES
     joltwallet__littlefs
 )
 
-set(PRINTSPHERE_MAIN_PRIV_REQUIRES)
+set(INFOHUB_MAIN_PRIV_REQUIRES)
 
-set(PRINTSPHERE_PLUGIN_SRCS)
-if(CONFIG_PRINTSPHERE_PLUGIN_WEATHER)
-    list(APPEND PRINTSPHERE_PLUGIN_SRCS
+set(INFOHUB_PLUGIN_SRCS)
+if(CONFIG_INFOHUB_PLUGIN_WEATHER)
+    list(APPEND INFOHUB_PLUGIN_SRCS
         "src/plugins/weather/weather_flow_client.cpp"
         "src/plugins/weather/weather_plugin.cpp"
         "src/plugins/weather/weather_plugin_portal.cpp"
     )
 endif()
 
-if("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1")
-    list(APPEND PRINTSPHERE_MAIN_PRIV_REQUIRES
+if("${INFOHUB_HW_COMPILE_DEFINE}" STREQUAL "INFOHUB_HW_VARIANT_AMOLED_1_75=1")
+    list(APPEND INFOHUB_MAIN_PRIV_REQUIRES
         XPowersLib
         esp32_s3_touch_amoled_1_75
     )
-elseif("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_LCD_2_8C=1")
-    list(APPEND PRINTSPHERE_MAIN_PRIV_REQUIRES
+elseif("${INFOHUB_HW_COMPILE_DEFINE}" STREQUAL "INFOHUB_HW_VARIANT_LCD_2_8C=1")
+    list(APPEND INFOHUB_MAIN_PRIV_REQUIRES
         esp_adc
         esp32_s3_touch_lcd_2_8c
     )
@@ -76,7 +76,7 @@ idf_component_register(
         "src/ui_shell.cpp"
         "src/ui_toolkit.cpp"
         "src/wifi_manager.cpp"
-        ${PRINTSPHERE_PLUGIN_SRCS}
+        ${INFOHUB_PLUGIN_SRCS}
     INCLUDE_DIRS
         "include"
     EMBED_TXTFILES
@@ -85,53 +85,53 @@ idf_component_register(
         # Kconfig toggle exists), so there's nothing to gate this behind.
         # See the "AudioNotifier and error_lookup changes sketch" in
         # CLAUDE.md for when that changes.
-        "include/printsphere/plugins/printer/bambu.cert"
-        "include/printsphere/plugins/printer/bambu_p2s_250626.cert"
-        "include/printsphere/plugins/printer/bambu_h2c_251122.cert"
-        "include/printsphere/plugins/printer/bambu_x2c_260425.cert"
-        "include/printsphere/plugins/printer/error_lookup.tsv"
+        "include/infohub/plugins/printer/bambu.cert"
+        "include/infohub/plugins/printer/bambu_p2s_250626.cert"
+        "include/infohub/plugins/printer/bambu_h2c_251122.cert"
+        "include/infohub/plugins/printer/bambu_x2c_260425.cert"
+        "include/infohub/plugins/printer/error_lookup.tsv"
     REQUIRES
-        ${PRINTSPHERE_MAIN_REQUIRES}
+        ${INFOHUB_MAIN_REQUIRES}
     PRIV_REQUIRES
-        ${PRINTSPHERE_MAIN_PRIV_REQUIRES}
+        ${INFOHUB_MAIN_PRIV_REQUIRES}
 )
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    PRINTSPHERE_RELEASE_VERSION="${PRINTSPHERE_RELEASE_VERSION}"
-    ${PRINTSPHERE_HW_COMPILE_DEFINE}
+    INFOHUB_RELEASE_VERSION="${INFOHUB_RELEASE_VERSION}"
+    ${INFOHUB_HW_COMPILE_DEFINE}
 )
 
-if("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_AMOLED_1_75=1")
-    idf_component_get_property(PRINTSPHERE_BSP_DIR esp32_s3_touch_amoled_1_75 COMPONENT_DIR)
-    idf_component_get_property(PRINTSPHERE_BSP_LIB esp32_s3_touch_amoled_1_75 COMPONENT_LIB)
-    idf_component_get_property(PRINTSPHERE_XPOWERS_DIR XPowersLib COMPONENT_DIR)
-    idf_component_get_property(PRINTSPHERE_XPOWERS_LIB XPowersLib COMPONENT_LIB)
+if("${INFOHUB_HW_COMPILE_DEFINE}" STREQUAL "INFOHUB_HW_VARIANT_AMOLED_1_75=1")
+    idf_component_get_property(INFOHUB_BSP_DIR esp32_s3_touch_amoled_1_75 COMPONENT_DIR)
+    idf_component_get_property(INFOHUB_BSP_LIB esp32_s3_touch_amoled_1_75 COMPONENT_LIB)
+    idf_component_get_property(INFOHUB_XPOWERS_DIR XPowersLib COMPONENT_DIR)
+    idf_component_get_property(INFOHUB_XPOWERS_LIB XPowersLib COMPONENT_LIB)
     target_include_directories(${COMPONENT_LIB} PRIVATE
-        "${PRINTSPHERE_BSP_DIR}/include"
-        "${PRINTSPHERE_XPOWERS_DIR}/src"
+        "${INFOHUB_BSP_DIR}/include"
+        "${INFOHUB_XPOWERS_DIR}/src"
     )
     target_link_libraries(${COMPONENT_LIB} PRIVATE
-        ${PRINTSPHERE_BSP_LIB}
-        ${PRINTSPHERE_XPOWERS_LIB}
+        ${INFOHUB_BSP_LIB}
+        ${INFOHUB_XPOWERS_LIB}
     )
-elseif("${PRINTSPHERE_HW_COMPILE_DEFINE}" STREQUAL "PRINTSPHERE_HW_VARIANT_LCD_2_8C=1")
-    idf_component_get_property(PRINTSPHERE_BSP_DIR esp32_s3_touch_lcd_2_8c COMPONENT_DIR)
-    idf_component_get_property(PRINTSPHERE_BSP_LIB esp32_s3_touch_lcd_2_8c COMPONENT_LIB)
-    idf_component_get_property(PRINTSPHERE_ADC_DIR esp_adc COMPONENT_DIR)
-    idf_component_get_property(PRINTSPHERE_ADC_LIB esp_adc COMPONENT_LIB)
+elseif("${INFOHUB_HW_COMPILE_DEFINE}" STREQUAL "INFOHUB_HW_VARIANT_LCD_2_8C=1")
+    idf_component_get_property(INFOHUB_BSP_DIR esp32_s3_touch_lcd_2_8c COMPONENT_DIR)
+    idf_component_get_property(INFOHUB_BSP_LIB esp32_s3_touch_lcd_2_8c COMPONENT_LIB)
+    idf_component_get_property(INFOHUB_ADC_DIR esp_adc COMPONENT_DIR)
+    idf_component_get_property(INFOHUB_ADC_LIB esp_adc COMPONENT_LIB)
     target_include_directories(${COMPONENT_LIB} PRIVATE
-        "${PRINTSPHERE_BSP_DIR}/include"
-        "${PRINTSPHERE_ADC_DIR}/include"
+        "${INFOHUB_BSP_DIR}/include"
+        "${INFOHUB_ADC_DIR}/include"
     )
     target_link_libraries(${COMPONENT_LIB} PRIVATE
-        ${PRINTSPHERE_BSP_LIB}
-        ${PRINTSPHERE_ADC_LIB}
+        ${INFOHUB_BSP_LIB}
+        ${INFOHUB_ADC_LIB}
     )
 endif()
 
-string(FIND "${PRINTSPHERE_RELEASE_VERSION}" "-debug" _debug_pos)
-string(FIND "${PRINTSPHERE_RELEASE_VERSION}" "_debug" _debug_pos2)
+string(FIND "${INFOHUB_RELEASE_VERSION}" "-debug" _debug_pos)
+string(FIND "${INFOHUB_RELEASE_VERSION}" "_debug" _debug_pos2)
 if(_debug_pos GREATER -1 OR _debug_pos2 GREATER -1)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE PRINTSPHERE_DEBUG_BUILD=1)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE INFOHUB_DEBUG_BUILD=1)
 endif()
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra)

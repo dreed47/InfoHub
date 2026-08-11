@@ -7,7 +7,7 @@
 // handle_health/handle_config_get) come from portal_shared.hpp — see that
 // header for why they stay physically defined in setup_portal.cpp.
 
-#include "printsphere/plugins/printer/printer_plugin.hpp"
+#include "infohub/plugins/printer/printer_plugin.hpp"
 
 #include <cctype>
 #include <string>
@@ -17,16 +17,16 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "printsphere/config_store.hpp"
-#include "printsphere/portal_shared.hpp"
-#include "printsphere/setup_portal.hpp"
-#include "printsphere/ui.hpp"
+#include "infohub/config_store.hpp"
+#include "infohub/portal_shared.hpp"
+#include "infohub/setup_portal.hpp"
+#include "infohub/ui.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.printer";
+constexpr char kTag[] = "infohub.printer";
 
 BambuCloudCredentials merge_cloud_credentials(BambuCloudCredentials submitted,
                                               const BambuCloudCredentials& stored) {
@@ -991,4 +991,4 @@ void PrinterPlugin::register_portal_routes(httpd_handle_t server) {
   }
 }
 
-}  // namespace printsphere
+}  // namespace infohub

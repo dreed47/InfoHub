@@ -1,4 +1,4 @@
-#include "printsphere/serial_provisioner.hpp"
+#include "infohub/serial_provisioner.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -9,16 +9,16 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "freertos/task.h"
-#include "printsphere/config_store.hpp"
-#include "printsphere/wifi_manager.hpp"
+#include "infohub/config_store.hpp"
+#include "infohub/wifi_manager.hpp"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.improv";
+constexpr char kTag[] = "infohub.improv";
 constexpr char kHeader[] = "IMPROV";
 constexpr uint8_t kProtocolVersion = 1;
 constexpr uint8_t kTypeCurrentState = 0x01;
@@ -40,9 +40,9 @@ constexpr TickType_t kConnectTimeout = pdMS_TO_TICKS(45000);
 constexpr uint32_t kTaskStackBytes = 6144;
 
 const char* hardware_variant() {
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
   return "ESP32-S3 / AMOLED 1.75";
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
   return "ESP32-S3 / LCD 2.8C";
 #else
   return "ESP32-S3";
@@ -94,7 +94,7 @@ esp_err_t SerialProvisioner::start() {
   }
 
   const BaseType_t created =
-      xTaskCreate(task_entry, "printsphere_improv", kTaskStackBytes / sizeof(StackType_t), this, 4, nullptr);
+      xTaskCreate(task_entry, "infohub_improv", kTaskStackBytes / sizeof(StackType_t), this, 4, nullptr);
   if (created != pdPASS) {
     return ESP_ERR_NO_MEM;
   }
@@ -227,7 +227,7 @@ void SerialProvisioner::process_rpc(Transport transport, const uint8_t* data, si
 
     case kCommandDeviceInfo:
       send_rpc_result(transport, kCommandDeviceInfo,
-                      {"PrintSphere", PRINTSPHERE_RELEASE_VERSION, hardware_variant(),
+                      {"InfoHub", INFOHUB_RELEASE_VERSION, hardware_variant(),
                        config_store_.load_device_name()});
       return;
 
@@ -340,4 +340,4 @@ std::string SerialProvisioner::device_url() const {
   return ip.empty() ? std::string{} : "http://" + ip + "/";
 }
 
-}  // namespace printsphere
+}  // namespace infohub

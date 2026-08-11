@@ -1,4 +1,4 @@
-#include "printsphere/config_store.hpp"
+#include "infohub/config_store.hpp"
 
 #include <cctype>
 #include <cerrno>
@@ -14,12 +14,12 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.cfg";
-constexpr char kNamespace[] = "printsphere";
-constexpr char kDeviceName[] = "PrintSphere";
+constexpr char kTag[] = "infohub.cfg";
+constexpr char kNamespace[] = "infohub";
+constexpr char kDeviceName[] = "InfoHub";
 
 std::string color_to_html_hex(uint32_t color) {
   char buffer[8] = {};
@@ -787,4 +787,4 @@ esp_err_t ConfigStore::save_plugin_record_count(const char* plugin_ns, uint8_t c
   return save_string_ns(plugin_ns, "count", std::to_string(count));
 }
 
-}  // namespace printsphere
+}  // namespace infohub

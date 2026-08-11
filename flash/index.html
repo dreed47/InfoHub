@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
-    <title>PrintSphere Factory Flash</title>
+    <title>InfoHub Factory Flash</title>
     <script
       type="module"
       src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
@@ -423,14 +423,14 @@
   <body>
     <div class="page">
       <header class="topbar">
-        <div class="brand" aria-label="PrintSphere">
+        <div class="brand" aria-label="InfoHub">
           <div class="mark" aria-hidden="true">PS</div>
           <div class="brand-text">
-            <p class="brand-name">PrintSphere</p>
+            <p class="brand-name">InfoHub</p>
             <p class="brand-subtitle">USB setup for new devices</p>
           </div>
         </div>
-        <a class="repo-link" href="https://github.com/cptkirki/PrintSphere">GitHub repository</a>
+        <a class="repo-link" href="https://github.com/dreed47/InfoHub">GitHub repository</a>
       </header>
 
       <main>
@@ -438,7 +438,7 @@
           <div class="tool">
             <h1 id="page-title">Factory Flash</h1>
             <p class="lead">
-              Prepare a new PrintSphere device directly from your browser. Connect it with a
+              Prepare a new InfoHub device directly from your browser. Connect it with a
               USB data cable, choose the firmware, then start the install.
             </p>
 
@@ -480,14 +480,14 @@
             </div>
           </div>
 
-          <aside class="visual" aria-label="PrintSphere device">
+          <aside class="visual" aria-label="InfoHub device">
             <img
               src="https://github.com/user-attachments/assets/820c2e9b-10a7-4430-949c-e8b0adc1357d"
-              alt="PrintSphere circular display device"
+              alt="InfoHub circular display device"
             >
             <div class="caption">
               <strong id="caption-version">Stable v1.6.2</strong>
-              <span id="caption-path">release/initial/printsphere_full.bin</span>
+              <span id="caption-path">release/initial/infohub_full.bin</span>
             </div>
           </aside>
         </section>
@@ -499,18 +499,18 @@
           </div>
           <div class="detail">
             <h2>Device</h2>
-            <p>Use this for the Waveshare ESP32-S3 AMOLED hardware used by PrintSphere.</p>
+            <p>Use this for the Waveshare ESP32-S3 AMOLED hardware used by InfoHub.</p>
           </div>
           <div class="detail">
             <h2>Next Step</h2>
-            <p>Keep the USB cable connected after flashing. The installer will scan for Wi-Fi networks and configure PrintSphere directly over USB.</p>
+            <p>Keep the USB cable connected after flashing. The installer will scan for Wi-Fi networks and configure InfoHub directly over USB.</p>
           </div>
         </section>
 
         <section class="ota-panel" aria-labelledby="ota-title">
           <div>
             <h2 id="ota-title">OTA Update — keep your configuration</h2>
-            <p>For an existing PrintSphere, open its Web Config page and use the matching OTA image. This updates the inactive firmware slot and retains Wi-Fi, printer and display settings.</p>
+            <p>For an existing InfoHub, open its Web Config page and use the matching OTA image. This updates the inactive firmware slot and retains Wi-Fi, printer and display settings.</p>
             <p class="note warning" id="ota-note">Select the same hardware variant that is installed on your device.</p>
           </div>
           <div class="ota-actions">
@@ -530,18 +530,18 @@
           label: "Stable v1.6.2 (1.75 AMOLED)",
           channel: "Stable",
           version: "v1.6.2",
-          path: "../release/initial/printsphere_full.bin",
-          displayPath: "release/initial/printsphere_full.bin",
-          otaUrl: "https://github.com/cptkirki/PrintSphere/blob/main/release/ota/printsphere_ota.bin",
+          path: "../release/initial/infohub_full.bin",
+          displayPath: "release/initial/infohub_full.bin",
+          otaUrl: "https://github.com/dreed47/InfoHub/blob/main/release/ota/infohub_ota.bin",
           note: "Factory flash erases device data before installing v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.",
         },
         {
           label: 'Stable v1.6.2 (2.8" LCD)',
           channel: "Stable",
           version: "v1.6.2-2.8C",
-          path: "../release/2.8c/initial/printsphere_full.bin",
-          displayPath: "release/2.8c/initial/printsphere_full.bin",
-          otaUrl: "https://github.com/cptkirki/PrintSphere/blob/main/release/2.8c/ota/printsphere_ota.bin",
+          path: "../release/2.8c/initial/infohub_full.bin",
+          displayPath: "release/2.8c/initial/infohub_full.bin",
+          otaUrl: "https://github.com/dreed47/InfoHub/blob/main/release/2.8c/ota/infohub_ota.bin",
           note: 'Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
         },
       ];
@@ -575,7 +575,7 @@
         const imageUrl = new URL(firmware.path, window.location.href).href;
 
         return {
-          name: "PrintSphere",
+          name: "InfoHub",
           version: firmware.version,
           new_install_prompt_erase: false,
           new_install_improv_wait_time: 30,

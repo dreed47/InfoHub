@@ -1,14 +1,14 @@
-#include "printsphere/plugins/printer/status_resolver.hpp"
+#include "infohub/plugins/printer/status_resolver.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <string>
 
-#include "printsphere/plugins/printer/bambu_status.hpp"
-#include "printsphere/plugins/printer/error_lookup.hpp"
+#include "infohub/plugins/printer/bambu_status.hpp"
+#include "infohub/plugins/printer/error_lookup.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
@@ -1103,4 +1103,4 @@ PrinterSnapshot merge_status_sources(const PrinterSnapshot& local_snapshot, bool
   return snapshot;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

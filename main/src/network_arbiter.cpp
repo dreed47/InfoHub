@@ -1,11 +1,11 @@
-#include "printsphere/network_arbiter.hpp"
+#include "infohub/network_arbiter.hpp"
 
 #include "esp_log.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.netarb";
+constexpr char kTag[] = "infohub.netarb";
 }
 
 bool NetworkArbiter::try_acquire_handshake_slot(const char* owner_id) {
@@ -37,4 +37,4 @@ bool NetworkArbiter::handshake_in_flight() const {
   return active_handshakes_.load(std::memory_order_acquire) > 0;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

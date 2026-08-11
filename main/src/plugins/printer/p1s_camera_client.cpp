@@ -1,4 +1,4 @@
-#include "printsphere/plugins/printer/p1s_camera_client.hpp"
+#include "infohub/plugins/printer/p1s_camera_client.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,11 +15,11 @@
 #include "esp_timer.h"
 #include "esp_tls.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.camera";
+constexpr char kTag[] = "infohub.camera";
 constexpr uint16_t kCameraPort = 6000;
 constexpr size_t kFrameHeaderBytes = 16;
 constexpr size_t kMaxFrameBytes = 256U * 1024U;
@@ -577,4 +577,4 @@ void P1sCameraClient::task_loop() {
   }
 }
 
-}  // namespace printsphere
+}  // namespace infohub

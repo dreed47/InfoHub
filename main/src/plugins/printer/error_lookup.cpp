@@ -1,4 +1,4 @@
-#include "printsphere/plugins/printer/error_lookup.hpp"
+#include "infohub/plugins/printer/error_lookup.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -10,11 +10,11 @@
 extern const char error_lookup_tsv_start[] asm("_binary_error_lookup_tsv_start");
 extern const char error_lookup_tsv_end[] asm("_binary_error_lookup_tsv_end");
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.lookup";
+constexpr char kTag[] = "infohub.lookup";
 
 struct LookupCacheEntry {
   bool valid = false;
@@ -287,4 +287,4 @@ std::string format_resolved_error_detail(int print_error_code,
   return resolve_primary_hms_detail(hms_codes, hms_count, model);
 }
 
-}  // namespace printsphere
+}  // namespace infohub

@@ -79,12 +79,12 @@ for (( i=0; i<${#STEPS}; i++ )); do
       ;;
     b)
       echo "==> build $VARIANT"
-      idf.py -B "$BUILD_DIR" -DPRINTSPHERE_HW_VARIANT="$VARIANT" reconfigure build
+      idf.py -B "$BUILD_DIR" -DINFOHUB_HW_VARIANT="$VARIANT" reconfigure build
       ;;
     f)
       [ -z "$PORT" ] && { echo "flash (f) requires -p <port>"; exit 1; }
       echo "==> flash $VARIANT via $PORT"
-      idf.py -B "$BUILD_DIR" -DPRINTSPHERE_HW_VARIANT="$VARIANT" -p "$PORT" flash
+      idf.py -B "$BUILD_DIR" -DINFOHUB_HW_VARIANT="$VARIANT" -p "$PORT" flash
       ;;
     m)
       [ -z "$PORT" ] && { echo "monitor (m) requires -p <port>"; exit 1; }

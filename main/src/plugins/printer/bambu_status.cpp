@@ -1,8 +1,8 @@
-#include "printsphere/plugins/printer/bambu_status.hpp"
+#include "infohub/plugins/printer/bambu_status.hpp"
 
 #include <cctype>
 
-namespace printsphere {
+namespace infohub {
 
 std::string normalize_bambu_status_token(const std::string& status_text) {
   std::string normalized;
@@ -344,4 +344,4 @@ std::string bambu_default_stage_label_for_status(const std::string& status_text,
   return "Status";
 }
 
-}  // namespace printsphere
+}  // namespace infohub

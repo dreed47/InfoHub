@@ -1,4 +1,4 @@
-#include "printsphere/application.hpp"
+#include "infohub/application.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -13,20 +13,20 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "printsphere/time_sync.hpp"
+#include "infohub/time_sync.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.app";
+constexpr char kTag[] = "infohub.app";
 constexpr TickType_t kScreenOffTouchWakePollSlice = pdMS_TO_TICKS(25);
 constexpr TickType_t kUiCommandWakePollSlice = pdMS_TO_TICKS(50);
 
@@ -87,14 +87,14 @@ Application::Application()
     printer_plugin_.printer_client().notify_cloud_presence(online);
   });
   plugins_[0] = &printer_plugin_;
-#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+#if CONFIG_INFOHUB_PLUGIN_WEATHER
   plugins_[1] = &weather_plugin_;
 #endif
 }
 
 void Application::run() {
   esp_log_level_set("mbedtls", ESP_LOG_WARN);
-  ESP_LOGI(kTag, "Bootstrapping native PrintSphere project");
+  ESP_LOGI(kTag, "Bootstrapping native InfoHub project");
 
   ESP_ERROR_CHECK(config_store_.initialize());
   // Apply persisted timezone before any localtime_r() consumer (UI ETA,
@@ -180,7 +180,7 @@ void Application::run() {
   // build_screen() runs after init() so plugins that need their own
   // core-service refs (e.g. PrinterPlugin::ui_) have them set first.
   printer_plugin_.build_screen(ui_.printer_select_page_container());
-#if CONFIG_PRINTSPHERE_PLUGIN_WEATHER
+#if CONFIG_INFOHUB_PLUGIN_WEATHER
   weather_plugin_.build_screen(ui_.plugin_page_container());
 #endif
 
@@ -191,6 +191,19 @@ void Application::run() {
     if (ui_.consume_portal_unlock_request()) {
       setup_portal_.request_unlock_pin();
     }
+
+    // Portal PIN/hint push is core, independent of any plugin's enabled
+    // state — a device running weather-only (printer disabled) still needs
+    // the PIN overlay to work. See Ui::update_portal_access_visuals().
+    const PortalAccessSnapshot portal_access = setup_portal_.access_snapshot();
+    ui_.set_portal_access_state(portal_access.lock_enabled, portal_access.request_authorized,
+                                portal_access.session_active, portal_access.pin_active,
+                                portal_access.pin_code, portal_access.pin_remaining_s,
+                                portal_access.session_remaining_s);
+    ui_.set_core_wifi_state(wifi_manager_.is_station_connected(),
+                            wifi_manager_.is_setup_access_point_active(),
+                            wifi_manager_.station_ip());
+    ui_.update_portal_access_visuals();
 
     for (Plugin* plugin : plugins_) {
       if (plugin == nullptr || !plugin->enabled()) {
@@ -216,4 +229,4 @@ void Application::run() {
   }
 }
 
-}  // namespace printsphere
+}  // namespace infohub

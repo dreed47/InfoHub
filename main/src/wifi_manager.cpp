@@ -1,4 +1,4 @@
-#include "printsphere/wifi_manager.hpp"
+#include "infohub/wifi_manager.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -11,13 +11,13 @@
 #include "esp_mac.h"
 #include "esp_wifi.h"
 
-#include "printsphere/time_sync.hpp"
+#include "infohub/time_sync.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.wifi";
-constexpr char kSetupPassword[] = "printsphere";
+constexpr char kTag[] = "infohub.wifi";
+constexpr char kSetupPassword[] = "infohub123";  // WPA2 PSK requires >= 8 chars
 constexpr char kSetupApIp[] = "192.168.4.1";
 constexpr uint8_t kSetupApRetryThreshold = 3;
 }  // namespace
@@ -340,4 +340,4 @@ void WifiManager::on_ip_event(int32_t event_id, void* event_data) {
   }
 }
 
-}  // namespace printsphere
+}  // namespace infohub

@@ -1,4 +1,4 @@
-#include "printsphere/audio_notifier.hpp"
+#include "infohub/audio_notifier.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -13,19 +13,19 @@
 #include "freertos/queue.h"
 #include "freertos/task.h"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr const char* kTag = "printsphere.audio";
+constexpr const char* kTag = "infohub.audio";
 
 // Sample rate kept low to minimise CPU and DMA pressure — a square wave only
 // needs to clear Nyquist for the highest fundamental we play (~1500 Hz).
@@ -112,7 +112,7 @@ constexpr Melody melody_for(AudioNotifier::Event event) {
 
 // Worker-owned state. Kept in a single anonymous namespace because there is
 // only ever one notifier instance for the whole firmware (matches the rest of
-// printsphere's "one-of-everything" design).
+// infohub's "one-of-everything" design).
 
 // Queue items are uint8_t. Bits [6:0] carry the Event index; bit 7 is the
 // "force" flag that bypasses both the master enabled gate and the per-event
@@ -467,4 +467,4 @@ uint8_t AudioNotifier::register_event(const char* stable_key, bool default_enabl
   return slot;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

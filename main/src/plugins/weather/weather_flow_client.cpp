@@ -1,4 +1,4 @@
-#include "printsphere/plugins/weather/weather_flow_client.hpp"
+#include "infohub/plugins/weather/weather_flow_client.hpp"
 
 #include <cerrno>
 
@@ -7,12 +7,12 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "printsphere/wifi_manager.hpp"
+#include "infohub/wifi_manager.hpp"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.weather";
+constexpr char kTag[] = "infohub.weather";
 constexpr size_t kMaxJsonResponseBytes = 16U * 1024U;
 constexpr char kUrlPrefix[] = "https://swd.weatherflow.com/swd/rest/observations/station/";
 
@@ -296,4 +296,4 @@ bool WeatherFlowClient::perform_json_request(const std::string& url, int* status
   return true;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

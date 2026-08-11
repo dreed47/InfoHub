@@ -1,6 +1,6 @@
-#include "printsphere/pmu.hpp"
+#include "infohub/pmu.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 
 #define XPOWERS_CHIP_AXP2101
 #include "XPowersLib.h"
@@ -10,11 +10,11 @@
 #include "esp_check.h"
 #include "esp_log.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.pmu";
+constexpr char kTag[] = "infohub.pmu";
 constexpr uint32_t kI2cTimeoutMs = 1000;
 
 XPowersPMU s_pmu;
@@ -115,20 +115,20 @@ PowerSnapshot PmuManager::sample() const {
   return snapshot;
 }
 
-}  // namespace printsphere
+}  // namespace infohub
 
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_log.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.pmu";
+constexpr char kTag[] = "infohub.pmu";
 constexpr adc_unit_t kBatteryAdcUnit = ADC_UNIT_1;
 constexpr adc_channel_t kBatteryAdcChannel = ADC_CHANNEL_3;
 constexpr adc_atten_t kBatteryAdcAtten = ADC_ATTEN_DB_12;
@@ -318,8 +318,8 @@ PowerSnapshot PmuManager::sample() const {
   return snapshot;
 }
 
-}  // namespace printsphere
+}  // namespace infohub
 
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif

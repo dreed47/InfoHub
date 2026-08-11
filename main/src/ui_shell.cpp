@@ -1,4 +1,4 @@
-#include "printsphere/ui_shell.hpp"
+#include "infohub/ui_shell.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -6,20 +6,20 @@
 #include "driver/gpio.h"
 #include "esp_lv_adapter.h"
 #include "esp_log.h"
-#include "printsphere/board_config.hpp"
+#include "infohub/board_config.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.ui";
+constexpr char kTag[] = "infohub.ui";
 }  // namespace
 
 void UiShell::register_page_slot(int index, lv_obj_t* const* object, const bool* enabled_flag) {
@@ -251,4 +251,4 @@ void UiShell::update_power_save(bool on_battery, bool keep_awake, bool print_act
   }
 }
 
-}  // namespace printsphere
+}  // namespace infohub

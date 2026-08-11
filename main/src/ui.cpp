@@ -1,4 +1,4 @@
-#include "printsphere/ui.hpp"
+#include "infohub/ui.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -18,15 +18,15 @@
 #include "esp_timer.h"
 #include "driver/gpio.h"
 #include "png.h"
-#include "printsphere/board_config.hpp"
-#include "printsphere/ui_toolkit.hpp"
+#include "infohub/board_config.hpp"
+#include "infohub/ui_toolkit.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
 extern "C" {
@@ -39,11 +39,11 @@ extern const lv_font_t mdi_30;
 extern const lv_font_t mdi_40;
 }
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.ui";
+constexpr char kTag[] = "infohub.ui";
 constexpr size_t kImagePersistentReserveBytes = 20U * 1024U;
 constexpr int kDefaultBrightnessPercent = 80;
 constexpr int kRingStrokeWidth = 22;
@@ -53,7 +53,7 @@ constexpr int kRemainingRowY = 172;
 // experimental print-control buttons are compiled in. The default build keeps
 // the original full-size cover layout (320 px, centered) to preserve the
 // look-and-feel of releases prior to v1.6-rc1.
-#if CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
+#if CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
 constexpr int kPage2PreviewSize = 240;
 constexpr int kPage2PreviewYOffset = -90;
 constexpr int kPage2NoteWithImageY = 56;
@@ -74,7 +74,15 @@ constexpr int kPage3SubnoteWithImageY = 182;
 // status sits above with comfortable breathing room.
 constexpr int kPage3StatusAboveImageY = -138;
 constexpr int kAuxTempRowY = 28;
-constexpr int kSwipeThresholdPx = 24;
+// Was 24 — raised after confirming via on-device debug logging that natural
+// hand tremor during a ~1s hold-for-PIN long-press was crossing this
+// threshold, flipping the gesture into brightness-drag mode
+// (overlay_visible_=true), which silently vetoes the long-press unlock
+// request. This threshold gates both horizontal-swipe and vertical-
+// brightness-drag commitment, so a real, deliberate swipe/drag still
+// resolves quickly — only accidental jitter during a stationary hold is now
+// tolerated.
+constexpr int kSwipeThresholdPx = 40;
 constexpr int kGestureAxisLockMarginPx = 16;
 constexpr int kBrightnessHorizontalTolerancePx = 18;
 constexpr int kRotatedVisualOffsetX = 0;
@@ -263,7 +271,7 @@ void apply_touch_rotation_flags(DisplayRotation rotation, bsp_display_cfg_t* cfg
     return;
   }
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
     switch (rotation) {
       case DisplayRotation::k90:
         cfg->touch_flags.swap_xy = 1;
@@ -1022,7 +1030,7 @@ esp_err_t Ui::initialize() {
         };
       }(),
       .rotation = ESP_LV_ADAPTER_ROTATE_0,
-#if defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#if defined(INFOHUB_HW_VARIANT_LCD_2_8C)
       // The 2.8C board is an RGB panel without a TE signal. Use double full
       // buffering so the RGB driver can switch complete framebuffers instead of
       // showing LVGL's in-progress updates on screen.
@@ -1127,9 +1135,10 @@ void Ui::set_portal_access_state(bool lock_enabled, bool request_authorized,
     return;
   }
 
-  // Store portal data without LVGL lock.  The actual text computation and
-  // visual update happen inside apply_snapshot_locked() which already holds
-  // the lock.  This eliminates a separate lock acquisition per tick.
+  // Store portal data without LVGL lock — Application calls
+  // update_portal_access_visuals() (which does its own locking) right after
+  // pushing this, so text computation and the visual update stay a single
+  // logical step without holding the lock across two separate calls.
   portal_lock_enabled_ = lock_enabled;
   portal_request_authorized_ = request_authorized;
   portal_session_active_ = session_active;
@@ -1139,12 +1148,33 @@ void Ui::set_portal_access_state(bool lock_enabled, bool request_authorized,
   portal_session_remaining_s_ = session_remaining_s;
 }
 
+void Ui::set_core_wifi_state(bool station_connected, bool setup_ap_active,
+                             const std::string& station_ip) {
+  core_wifi_connected_ = station_connected;
+  core_setup_ap_active_ = setup_ap_active;
+  core_wifi_ip_ = station_ip;
+}
+
+void Ui::update_portal_access_visuals() {
+  if (!initialized_) {
+    return;
+  }
+  LvglLockGuard lock(200, "update_portal_access_visuals");
+  if (!lock.locked()) {
+    return;
+  }
+  compute_portal_texts_locked();
+}
+
 void Ui::compute_portal_texts_locked() {
-  const bool provisioning_context =
-      last_snapshot_.setup_ap_active ||
-      last_snapshot_.connection == PrinterConnectionState::kWaitingForCredentials;
+  // Plugin-agnostic on purpose — see set_core_wifi_state(). No printer-only
+  // Bambu-cloud-login sub-state here anymore (that used to also suppress the
+  // hint via PrinterSnapshot::connection == kWaitingForCredentials); losing
+  // that narrow nicety is the deliberate tradeoff for zero PrinterSnapshot
+  // dependency in core portal chrome.
+  const bool provisioning_context = core_setup_ap_active_ || !core_wifi_connected_;
   const bool station_portal_available =
-      !last_snapshot_.setup_ap_active && last_snapshot_.wifi_connected && !last_snapshot_.wifi_ip.empty();
+      !core_setup_ap_active_ && core_wifi_connected_ && !core_wifi_ip_.empty();
 
   if (portal_pin_active_) {
     portal_hint_text_ = portal_request_authorized_ ? "Web Config PIN active on the display"
@@ -1166,12 +1196,12 @@ void Ui::compute_portal_texts_locked() {
       portal_hint_text_.clear();
     } else if (!portal_lock_enabled_) {
       portal_hint_text_ =
-          station_portal_available ? ("Open " + last_snapshot_.wifi_ip) : "Web Config open";
+          station_portal_available ? ("Open " + core_wifi_ip_) : "Web Config open";
     } else if (portal_hint_boot_ms_ != 0 &&
                static_cast<uint64_t>(esp_timer_get_time() / 1000ULL) <
                    portal_hint_boot_ms_ + kPortalHintIntroMs) {
       portal_hint_text_ = station_portal_available
-                              ? ("Open " + last_snapshot_.wifi_ip + " | Hold for PIN")
+                              ? ("Open " + core_wifi_ip_ + " | Hold for PIN")
                               : "Hold for PIN";
     } else {
       portal_hint_text_.clear();
@@ -1787,7 +1817,9 @@ void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_
     logo_recolor_enabled_ = logo_recolor_enabled;
     logo_recolor_hex_ = logo_recolor_hex;
   }
-  compute_portal_texts_locked();
+  // Portal hint/PIN overlay is now driven by Application calling
+  // update_portal_access_visuals() directly every loop iteration (core, not
+  // routed through any plugin's snapshot tick) — see that method.
   apply_page_visibility();
 }
 
@@ -2700,10 +2732,10 @@ esp_err_t Ui::build_dashboard() {
 
   // Print-control buttons (pause/resume + stop). Only compiled in when the
   // experimental print-control feature is enabled via Kconfig. See the help
-  // text of CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL for background on
+  // text of CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL for background on
   // why this is opt-in. When disabled, page2_pause_button_/page2_stop_button_
   // stay nullptr and update_print_buttons_locked() becomes a no-op.
-#if CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
+#if CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
   auto style_print_button = [&](lv_obj_t* button, lv_color_t bg) {
     lv_obj_set_size(button, 96, 64);
     lv_obj_set_style_radius(button, 14, 0);
@@ -2739,7 +2771,7 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_color(page2_stop_button_label_, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_style_text_font(page2_stop_button_label_, info20, 0);
   set_label_text_if_changed(page2_stop_button_label_, LV_SYMBOL_STOP);
-#endif  // CONFIG_PRINTSPHERE_EXPERIMENTAL_PRINT_CONTROL
+#endif  // CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
 
   page3_image_ = lv_image_create(page3_);
   lv_obj_set_size(page3_image_, board::kDisplayWidth, kPage3CameraHeight);
@@ -2930,8 +2962,8 @@ void Ui::hide_printer_content_pages_locked() {
   // Ring timer resume is handled by apply_ring_visual_locked via apply_snapshot.
 }
 
-void Ui::set_printer_plugin_enabled(bool enabled) {
-  LvglLockGuard lock(200, "set_printer_plugin_enabled");
+void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
+  LvglLockGuard lock(lock_timeout_ms, "set_printer_plugin_enabled");
   if (!lock.locked()) {
     return;
   }
@@ -3449,4 +3481,4 @@ void Ui::handle_remaining_row_click() {
   apply_snapshot_locked(last_snapshot_, false);
 }
 
-}  // namespace printsphere
+}  // namespace infohub

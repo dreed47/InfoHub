@@ -1,4 +1,4 @@
-#include "printsphere/plugins/printer/printer_client.hpp"
+#include "infohub/plugins/printer/printer_client.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -11,20 +11,20 @@
 #include <utility>
 
 #include "cJSON.h"
-#include "printsphere/plugins/printer/bambu_status.hpp"
-#include "printsphere/plugins/printer/error_lookup.hpp"
-#include "printsphere/plugins/printer/status_resolver.hpp"
+#include "infohub/plugins/printer/bambu_status.hpp"
+#include "infohub/plugins/printer/error_lookup.hpp"
+#include "infohub/plugins/printer/status_resolver.hpp"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
 
-constexpr char kTag[] = "printsphere.printer";
+constexpr char kTag[] = "infohub.printer";
 
 // Lookup table: tray_info_idx → human-readable filament product name.
 // Bambu-branded entries have the "Bambu " prefix stripped for compact display.
@@ -351,7 +351,7 @@ void append_unique_hms_code(std::vector<uint64_t>* codes, uint64_t hms_code) {
     return;
   }
   // Filter out specific suppressed HMS codes at extraction level.
-  if (printsphere::is_hms_suppressed(hms_code)) {
+  if (infohub::is_hms_suppressed(hms_code)) {
     return;
   }
   if (std::find(codes->begin(), codes->end(), hms_code) == codes->end()) {
@@ -497,7 +497,7 @@ void log_heap_status(const char* context) {
 
 std::string make_client_id() {
   char buffer[48] = {};
-  std::snprintf(buffer, sizeof(buffer), "printsphere-%08" PRIx32 "%08" PRIx32,
+  std::snprintf(buffer, sizeof(buffer), "infohub-%08" PRIx32 "%08" PRIx32,
                 esp_random(), esp_random());
   return buffer;
 }
@@ -3071,4 +3071,4 @@ std::string PrinterClient::json_string(const cJSON* object, const char* key,
   return item->valuestring;
 }
 
-}  // namespace printsphere
+}  // namespace infohub

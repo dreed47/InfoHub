@@ -1,4 +1,4 @@
-#include "printsphere/plugins/printer/printer_plugin.hpp"
+#include "infohub/plugins/printer/printer_plugin.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -10,23 +10,23 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/task.h"
-#include "printsphere/audio_notifier.hpp"
-#include "printsphere/config_store.hpp"
-#include "printsphere/pmu.hpp"
-#include "printsphere/setup_portal.hpp"
-#include "printsphere/plugins/printer/error_lookup.hpp"
-#include "printsphere/plugins/printer/status_resolver.hpp"
-#include "printsphere/portal_shared.hpp"
-#include "printsphere/ui.hpp"
-#include "printsphere/ui_toolkit.hpp"
-#include "printsphere/wifi_manager.hpp"
+#include "infohub/audio_notifier.hpp"
+#include "infohub/config_store.hpp"
+#include "infohub/pmu.hpp"
+#include "infohub/setup_portal.hpp"
+#include "infohub/plugins/printer/error_lookup.hpp"
+#include "infohub/plugins/printer/status_resolver.hpp"
+#include "infohub/portal_shared.hpp"
+#include "infohub/ui.hpp"
+#include "infohub/ui_toolkit.hpp"
+#include "infohub/wifi_manager.hpp"
 
-#if defined(PRINTSPHERE_HW_VARIANT_AMOLED_1_75)
+#if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
-#elif defined(PRINTSPHERE_HW_VARIANT_LCD_2_8C)
+#elif defined(INFOHUB_HW_VARIANT_LCD_2_8C)
 #include "bsp/esp32_s3_touch_lcd_2_8c.h"
 #else
-#error "Unknown PrintSphere hardware variant"
+#error "Unknown InfoHub hardware variant"
 #endif
 
 // Font global, declared the same way ui.cpp/weather_plugin.cpp do: extern
@@ -37,10 +37,10 @@ extern const lv_font_t dosis_20;
 extern const lv_font_t dosis_32;
 }
 
-namespace printsphere {
+namespace infohub {
 
 namespace {
-constexpr char kTag[] = "printsphere.printer";
+constexpr char kTag[] = "infohub.printer";
 constexpr TickType_t kStopBannerDuration = pdMS_TO_TICKS(12000);
 constexpr TickType_t kHybridCameraCloudCooldown = pdMS_TO_TICKS(8000);
 constexpr TickType_t kLocalMqttHandoffCooldown = pdMS_TO_TICKS(30000);
@@ -456,7 +456,12 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   }
 
   set_enabled(ctx.config_store.load_plugin_string(id(), "enabled") != "0");
-  ui_->set_printer_plugin_enabled(enabled());
+  // Longer timeout than the default 200ms: this runs immediately after
+  // Ui::initialize()'s own build_dashboard() call, which can still be
+  // holding the LVGL lock for ~300ms — losing that race at boot would
+  // silently leave the pager showing printer pages regardless of the
+  // persisted disabled state (no retry exists once init() moves on).
+  ui_->set_printer_plugin_enabled(enabled(), /*lock_timeout_ms=*/2000);
   return ESP_OK;
 }
 
@@ -718,12 +723,9 @@ void PrinterPlugin::replay_card_animations_locked() {
   }
 }
 
-bool PrinterPlugin::is_provisioning_satisfied() const {
-  if (!enabled()) {
-    // An explicitly-disabled printer shouldn't block the setup portal from
-    // auto-closing on Wi-Fi connectivity alone.
-    return true;
-  }
+bool PrinterPlugin::is_configured() const {
+  // No enabled() check here — SetupPortal's generic is_provisioning_complete()
+  // already skips disabled plugins before ever calling this.
   const SourceMode source_mode = config_store_->load_source_mode();
   const bool local_connected =
       printer_client_.snapshot().connection == PrinterConnectionState::kOnline;
@@ -1188,13 +1190,9 @@ void PrinterPlugin::apply_ring_visual() {
 }
 
 void PrinterPlugin::update_ui() {
-  // Store portal state first (lock-free), then apply_snapshot uses it inside
-  // the same LVGL lock section — eliminates a separate lock acquisition.
-  const PortalAccessSnapshot portal_access = setup_portal_->access_snapshot();
-  ui_->set_portal_access_state(portal_access.lock_enabled, portal_access.request_authorized,
-                               portal_access.session_active, portal_access.pin_active,
-                               portal_access.pin_code, portal_access.pin_remaining_s,
-                               portal_access.session_remaining_s);
+  // Portal PIN/hint push is now core (Application calls it directly every
+  // loop iteration, independent of any plugin) — see
+  // Ui::update_portal_access_visuals().
   ui_->apply_snapshot(latest_snapshot_);
   apply_ring_visual();
 }
@@ -1209,4 +1207,4 @@ bool PrinterPlugin::wants_awake() const { return keep_screen_awake_; }
 
 uint32_t PrinterPlugin::desired_poll_interval_ms() const { return desired_poll_interval_ms_; }
 
-}  // namespace printsphere
+}  // namespace infohub

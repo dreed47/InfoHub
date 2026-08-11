@@ -1,9 +1,9 @@
-#include "printsphere/plugins/printer/printer_state.hpp"
+#include "infohub/plugins/printer/printer_state.hpp"
 
 #include <cctype>
 #include <utility>
 
-namespace printsphere {
+namespace infohub {
 
 void PrinterStateStore::set_snapshot(PrinterSnapshot snapshot) {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -268,4 +268,4 @@ SourceCapabilities default_cloud_capabilities() {
   return capabilities;
 }
 
-}  // namespace printsphere
+}  // namespace infohub
