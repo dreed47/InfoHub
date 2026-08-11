@@ -6,7 +6,7 @@
 #include "printsphere/config_store.hpp"
 #include "printsphere/plugin.hpp"
 #include "printsphere/pmu.hpp"
-#include "printsphere/printer_plugin.hpp"
+#include "printsphere/plugins/printer/printer_plugin.hpp"
 #include "printsphere/setup_portal.hpp"
 #include "printsphere/serial_provisioner.hpp"
 #include "printsphere/ui.hpp"

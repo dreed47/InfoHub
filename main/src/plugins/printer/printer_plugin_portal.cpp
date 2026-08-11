@@ -7,7 +7,7 @@
 // handle_health/handle_config_get) come from portal_shared.hpp — see that
 // header for why they stay physically defined in setup_portal.cpp.
 
-#include "printsphere/printer_plugin.hpp"
+#include "printsphere/plugins/printer/printer_plugin.hpp"
 
 #include <cctype>
 #include <string>

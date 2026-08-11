@@ -2,9 +2,9 @@
 
 #include <string>
 
-#include "printsphere/bambu_cloud_client.hpp"
+#include "printsphere/plugins/printer/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 
 namespace printsphere {
 

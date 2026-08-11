@@ -6,7 +6,7 @@
 
 #include "lvgl.h"
 #include "printsphere/config_store.hpp"
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 
 namespace printsphere {
 

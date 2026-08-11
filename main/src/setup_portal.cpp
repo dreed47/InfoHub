@@ -20,7 +20,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "printsphere/bambu_status.hpp"
+#include "printsphere/plugins/printer/bambu_status.hpp"
 #include "printsphere/debug_log_buffer.hpp"
 #include "printsphere/portal_shared.hpp"
 #include "printsphere/time_sync.hpp"

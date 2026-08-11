@@ -1,4 +1,4 @@
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 
 #include <cctype>
 #include <utility>

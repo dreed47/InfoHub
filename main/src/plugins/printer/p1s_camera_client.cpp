@@ -1,4 +1,4 @@
-#include "printsphere/p1s_camera_client.hpp"
+#include "printsphere/plugins/printer/p1s_camera_client.hpp"
 
 #include <algorithm>
 #include <array>

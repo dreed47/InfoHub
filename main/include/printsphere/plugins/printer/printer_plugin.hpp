@@ -6,11 +6,11 @@
 #include <vector>
 
 #include "freertos/FreeRTOS.h"
-#include "printsphere/bambu_cloud_client.hpp"
-#include "printsphere/p1s_camera_client.hpp"
+#include "printsphere/plugins/printer/bambu_cloud_client.hpp"
+#include "printsphere/plugins/printer/p1s_camera_client.hpp"
 #include "printsphere/plugin.hpp"
-#include "printsphere/printer_client.hpp"
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_client.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 
 namespace printsphere {
 

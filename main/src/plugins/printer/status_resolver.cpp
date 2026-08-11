@@ -5,7 +5,7 @@
 #include <cmath>
 #include <string>
 
-#include "printsphere/bambu_status.hpp"
+#include "printsphere/plugins/printer/bambu_status.hpp"
 #include "printsphere/plugins/printer/error_lookup.hpp"
 
 namespace printsphere {

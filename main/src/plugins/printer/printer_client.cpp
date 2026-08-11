@@ -1,4 +1,4 @@
-#include "printsphere/printer_client.hpp"
+#include "printsphere/plugins/printer/printer_client.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "cJSON.h"
-#include "printsphere/bambu_status.hpp"
+#include "printsphere/plugins/printer/bambu_status.hpp"
 #include "printsphere/plugins/printer/error_lookup.hpp"
 #include "printsphere/plugins/printer/status_resolver.hpp"
 #include "esp_heap_caps.h"

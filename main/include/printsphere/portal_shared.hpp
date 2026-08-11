@@ -6,7 +6,7 @@
 #include "cJSON.h"
 #include "esp_err.h"
 #include "esp_http_server.h"
-#include "printsphere/bambu_cloud_client.hpp"
+#include "printsphere/plugins/printer/bambu_cloud_client.hpp"
 #include "printsphere/config_store.hpp"
 #include "printsphere/mqtt_telemetry.hpp"
 

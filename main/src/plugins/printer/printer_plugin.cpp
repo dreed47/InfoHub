@@ -1,4 +1,4 @@
-#include "printsphere/printer_plugin.hpp"
+#include "printsphere/plugins/printer/printer_plugin.hpp"
 
 #include <algorithm>
 #include <cmath>

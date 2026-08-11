@@ -1,4 +1,4 @@
-#include "printsphere/bambu_status.hpp"
+#include "printsphere/plugins/printer/bambu_status.hpp"
 
 #include <cctype>
 

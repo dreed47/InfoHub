@@ -11,7 +11,7 @@
 #include "lvgl.h"
 #include "esp_err.h"
 #include "printsphere/config_store.hpp"
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 #include "printsphere/ui_shell.hpp"
 
 namespace printsphere {

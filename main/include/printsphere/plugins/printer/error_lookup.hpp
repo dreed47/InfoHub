@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "printsphere/printer_state.hpp"
+#include "printsphere/plugins/printer/printer_state.hpp"
 
 namespace printsphere {
 
