@@ -42,7 +42,9 @@ esp_err_t WeatherPlugin::handle_config_get(httpd_req_t* request) {
   body += json_escape(station_id);
   body += "\",\"poll_s\":";
   body += poll_s_str.empty() ? "300" : poll_s_str;
-  body += ",\"enabled\":";
+  body += ",\"units\":\"";
+  body += plugin->fahrenheit() ? "f" : "c";
+  body += "\",\"enabled\":";
   body += plugin->enabled() ? "true" : "false";
   body += ",\"configured\":";
   body += snapshot.configured ? "true" : "false";
@@ -89,6 +91,7 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   const std::string submitted_station_id = trim_copy(read_string_field(root, "station_id"));
   const std::string submitted_api_token = read_string_field(root, "api_token");
   const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
+  const std::string units_field = trim_copy(read_string_field(root, "units"));
   cJSON_Delete(root);
 
   const std::string stored_api_token =
@@ -103,11 +106,15 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
     }
   }
 
+  const bool fahrenheit = units_field == "f";
+
   plugin->config_store_->save_plugin_string(kPluginNs, "station_id", submitted_station_id);
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
   plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
+  plugin->config_store_->save_plugin_string(kPluginNs, "units", fahrenheit ? "f" : "c");
 
   plugin->client_.configure(submitted_station_id, api_token, poll_interval_s);
+  plugin->set_fahrenheit(fahrenheit);
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;

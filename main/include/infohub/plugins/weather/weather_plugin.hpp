@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 
 #include "infohub/plugin.hpp"
 #include "infohub/plugins/weather/weather_flow_client.hpp"
@@ -48,6 +49,17 @@ class WeatherPlugin : public Plugin {
 
   WeatherFlowClient& client() { return client_; }
 
+  // Display-only unit preference -- WeatherFlowClient always fetches/stores
+  // Celsius internally (confirmed: the plain observations endpoint has no
+  // units param at all, unlike better_forecast which does but is fetched
+  // hardcoded to units_temp=c for the same reason -- one internal unit,
+  // convert only at render time). Saved/applied alongside station_id/poll_s
+  // in handle_config_post, same instant-apply shape as
+  // WeatherFlowClient::configure() -- no reboot/re-fetch needed, the next
+  // update_ui() tick just renders in the new unit.
+  bool fahrenheit() const { return fahrenheit_.load(); }
+  void set_fahrenheit(bool fahrenheit) { fahrenheit_.store(fahrenheit); }
+
  private:
   static esp_err_t handle_config_get(httpd_req_t* request);
   static esp_err_t handle_config_post(httpd_req_t* request);
@@ -57,6 +69,8 @@ class WeatherPlugin : public Plugin {
   WifiManager* wifi_manager_ = nullptr;
   SetupPortal* setup_portal_ = nullptr;
   Ui* ui_ = nullptr;
+
+  std::atomic<bool> fahrenheit_{false};
 
   WeatherFlowClient client_{};
 

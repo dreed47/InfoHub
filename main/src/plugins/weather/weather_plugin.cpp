@@ -49,6 +49,13 @@ std::string hour_label_text(uint64_t time_unix) {
   std::snprintf(buffer, sizeof(buffer), "%d%s", hour12, local.tm_hour < 12 ? "am" : "pm");
   return buffer;
 }
+
+// WeatherFlowClient always stores Celsius internally (see fahrenheit_'s
+// declaration comment) -- this is the one place the display conversion
+// happens, applied wherever a temperature gets rendered.
+double celsius_to_display(double celsius_value, bool fahrenheit) {
+  return fahrenheit ? (celsius_value * 9.0 / 5.0 + 32.0) : celsius_value;
+}
 }  // namespace
 
 esp_err_t WeatherPlugin::init(PluginContext& ctx) {
@@ -80,6 +87,7 @@ void WeatherPlugin::load_config() {
   }
   client_.configure(station_id, api_token, poll_interval_s);
 
+  set_fahrenheit(config_store_->load_plugin_string(kPluginNs, "units") == "f");
   set_enabled(config_store_->load_plugin_string(kPluginNs, "enabled") != "0");
 }
 
@@ -215,9 +223,13 @@ void WeatherPlugin::update_ui() {
     return;
   }
 
+  const bool fahrenheit = fahrenheit_.load();
+
   if (snapshot.has_core_reading) {
     char temp_buf[16];
-    std::snprintf(temp_buf, sizeof(temp_buf), "%.1f\xC2\xB0" "C", snapshot.air_temperature_c);
+    std::snprintf(temp_buf, sizeof(temp_buf), "%.1f\xC2\xB0%s",
+                  celsius_to_display(snapshot.air_temperature_c, fahrenheit),
+                  fahrenheit ? "F" : "C");
     lv_label_set_text(temp_label_, temp_buf);
 
     char detail_buf[64];
@@ -277,7 +289,8 @@ void WeatherPlugin::update_ui() {
       }
       lv_label_set_text(fc.time_label, hour_label_text(entry.time_unix).c_str());
       char temp_buf[16];
-      std::snprintf(temp_buf, sizeof(temp_buf), "%.0f\xC2\xB0", entry.air_temperature_c);
+      std::snprintf(temp_buf, sizeof(temp_buf), "%.0f\xC2\xB0",
+                    celsius_to_display(entry.air_temperature_c, fahrenheit));
       lv_label_set_text(fc.temp_label, temp_buf);
       std::string conditions_text = entry.conditions;
       if (entry.precip_probability > 0.0) {
