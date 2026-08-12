@@ -2976,6 +2976,8 @@ void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
     // (now resumed) via update_page_availability_locked().
     active_page_ = clamp_enabled_page(active_page_);
     publish_page_state_snapshot();
+    apply_page0_parallax(true);
+    apply_page_visibility();
     update_no_plugins_overlay_locked();
     return;
   }
@@ -2985,6 +2987,10 @@ void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
   preview_page_available_ = false;
   camera_page_available_ = false;
   hide_printer_content_pages_locked();
+  active_page_ = clamp_enabled_page(active_page_);
+  publish_page_state_snapshot();
+  apply_page0_parallax(true);
+  apply_page_visibility();
   update_no_plugins_overlay_locked();
 }
 
