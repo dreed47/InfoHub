@@ -207,6 +207,10 @@ class Ui {
   // currently enabled. Called after any page-enabled state changes
   // (set_printer_plugin_enabled(), set_plugin_pages_enabled()).
   void update_no_plugins_overlay_locked();
+  // TEMPORARY diagnostic — logs active_page_, hidden-flag state, and x
+  // position for page1_/page3_ plus the pager's scroll_x, tagged with
+  // `where`. Remove once the printer-disable page-visibility bug is found.
+  void log_page_debug_state(const char* where);
   // Delegate to ui_shell_ — kept as same-named/same-signature Ui methods so
   // the many printer-content call sites below don't need touching.
   void note_activity(bool wake_display);

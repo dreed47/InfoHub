@@ -2988,6 +2988,7 @@ void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
     apply_page0_parallax(true);
     apply_page_visibility();
     update_no_plugins_overlay_locked();
+    log_page_debug_state("set_printer_plugin_enabled(true) end");
     return;
   }
   for (int u = 0; u < kMaxAmsUnits; ++u) {
@@ -3001,6 +3002,7 @@ void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
   apply_page0_parallax(true);
   apply_page_visibility();
   update_no_plugins_overlay_locked();
+  log_page_debug_state("set_printer_plugin_enabled(false) end");
 }
 
 void Ui::reserve_plugin_page_pool(uint16_t total_pages) {
@@ -3073,6 +3075,21 @@ void Ui::update_no_plugins_overlay_locked() {
   set_hidden(no_plugins_overlay_, ui_shell_.any_page_enabled());
 }
 
+void Ui::log_page_debug_state(const char* where) {
+  ESP_LOGI(kTag,
+           "[DIAG %s] active_page=%d printer_en=%d page1_hidden=%d page3_hidden=%d "
+           "page1_x=%ld page3_x=%ld page1_enabled_flag=%d page3_enabled_flag=%d "
+           "pager_scroll_x=%ld plugin_pool_size=%u",
+           where, active_page_, printer_plugin_enabled_,
+           page1_ != nullptr ? lv_obj_has_flag(page1_, LV_OBJ_FLAG_HIDDEN) : -1,
+           page3_ != nullptr ? lv_obj_has_flag(page3_, LV_OBJ_FLAG_HIDDEN) : -1,
+           page1_ != nullptr ? static_cast<long>(lv_obj_get_x(page1_)) : -1,
+           page3_ != nullptr ? static_cast<long>(lv_obj_get_x(page3_)) : -1,
+           ui_shell_.page_enabled(kPageIdxMain), ui_shell_.page_enabled(kPageIdxCamera),
+           ui_shell_.pager() != nullptr ? static_cast<long>(lv_obj_get_scroll_x(ui_shell_.pager())) : -1,
+           plugin_pool_size_);
+}
+
 void Ui::register_page_slots() {
   ui_shell_.register_page_slot(kPageIdxPrinterSelect, &page0_, &printer_plugin_enabled_);
   for (int u = 0; u < kMaxAmsUnits; ++u) {
@@ -3131,6 +3148,7 @@ void Ui::set_active_page(int page) {
   } else if (previous_page != clamped_page) {
     apply_snapshot_locked(last_snapshot_, true);
   }
+  log_page_debug_state("set_active_page end");
 }
 
 void Ui::set_pager_scroll_locked(bool locked) {
@@ -3233,6 +3251,8 @@ void Ui::handle_pager_event(lv_event_t* event) {
       snap_page = next_enabled_page(scroll_origin_page_, delta > 0 ? 1 : -1);
     }
   }
+  ESP_LOGI(kTag, "[DIAG snap] scroll_x=%d scroll_origin=%d snap_page=%d snap_page_enabled=%d",
+           scroll_x, scroll_origin_page_, snap_page, ui_shell_.page_enabled(snap_page));
   if (lv_obj_t* snap_target = page_object(snap_page); snap_target != nullptr) {
     const int target_x = lv_obj_get_x(snap_target);
     if (std::abs(scroll_x - target_x) > 1) {
