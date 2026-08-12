@@ -3005,6 +3005,8 @@ void Ui::set_plugin_page_enabled(bool enabled) {
   }
   scrolling_ = false;
   publish_page_state_snapshot();
+  apply_page0_parallax(true);
+  apply_page_visibility();
   update_no_plugins_overlay_locked();
 }
 
