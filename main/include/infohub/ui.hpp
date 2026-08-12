@@ -54,8 +54,7 @@ class Ui {
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  static constexpr int kPageIdxPluginPage = kPageIdxCamera + 1;
-  static constexpr int kPageIdxLast = kPageIdxPluginPage;
+  static constexpr int kPageIdxGenericFirst = kPageIdxCamera + 1;
 
   void set_display_rotation(DisplayRotation rotation);
   void set_display_tilt_deci_deg(int deci_deg);
@@ -119,12 +118,25 @@ class Ui {
 
   void request_wake_display();
 
-  // The one reserved generic plugin-page slot (kPageIdxPluginPage) — see the
-  // comment on that constant. A plugin calls build_screen() once with this
-  // container during Application startup, then drives visibility in the
-  // pager via set_plugin_page_enabled() from its own update_ui().
-  lv_obj_t* plugin_page_container() const { return plugin_page_; }
-  void set_plugin_page_enabled(bool enabled);
+  // Generic plugin-page pool: any non-printer plugin can reserve N pages for
+  // its own on-device screens. Application calls reserve_plugin_page_pool()
+  // once at boot (before initialize()) with the sum of every compiled-in
+  // plugin's Plugin::page_count(), then register_plugin_pages() once per
+  // plugin (after initialize()) to get that plugin's base index — pass
+  // plugin_page_container(base + i) to Plugin::build_screen() for each page
+  // i in [0, count).
+  void reserve_plugin_page_pool(uint16_t total_pages);
+  int register_plugin_pages(const char* plugin_id, uint8_t count);
+  lv_obj_t* plugin_page_container(int page_index) const;
+  // Umbrella on/off switch for one plugin's entire reserved page range (all
+  // pages it registered via register_plugin_pages()) — same role as
+  // set_printer_plugin_enabled() but generalized to any plugin/any page
+  // count. Always re-runs the pager's hide/parallax pass internally so a
+  // plugin can never forget to (this was previously a recurring bug: a
+  // page-enable toggle that skipped apply_page0_parallax()/
+  // apply_page_visibility() left stale printer-overlay text visible on top
+  // of the newly-active page).
+  void set_plugin_pages_enabled(const char* plugin_id, bool enabled);
 
   // Page 0 (printer-selector) is a fixed pager slot (kPageIdxPrinterSelect,
   // always present — PrinterPlugin is not Kconfig-optional like weather is)
@@ -187,7 +199,7 @@ class Ui {
   void hide_printer_content_pages_locked();
   // Shows/hides no_plugins_overlay_ based on whether any pager page is
   // currently enabled. Called after any page-enabled state changes
-  // (set_printer_plugin_enabled(), set_plugin_page_enabled()).
+  // (set_printer_plugin_enabled(), set_plugin_pages_enabled()).
   void update_no_plugins_overlay_locked();
   // Delegate to ui_shell_ — kept as same-named/same-signature Ui methods so
   // the many printer-content call sites below don't need touching.
@@ -281,8 +293,15 @@ class Ui {
   lv_obj_t* page1_ = nullptr;
   lv_obj_t* page2_ = nullptr;
   lv_obj_t* page3_ = nullptr;
-  lv_obj_t* plugin_page_ = nullptr;
-  bool plugin_page_enabled_ = false;  // starts disabled — pager skips it until a plugin turns it on
+  // Generic plugin-page pool storage — sized once by reserve_plugin_page_pool()
+  // (before initialize() creates the LVGL objects), never resized after, so
+  // the raw pointers register_plugin_pages() hands to UiShell::register_page_slot()
+  // stay valid for the lifetime of Ui. unique_ptr<T[]> instead of std::vector<bool>
+  // specifically for plugin_pages_enabled_: vector<bool> is bit-packed and can't
+  // hand out a stable bool* to an individual element.
+  uint16_t plugin_pool_size_ = 0;
+  std::unique_ptr<lv_obj_t*[]> plugin_pages_;
+  std::unique_ptr<bool[]> plugin_pages_enabled_;
   bool printer_plugin_enabled_ = true;  // registered against page0/page1's slots
   lv_obj_t* no_plugins_overlay_ = nullptr;
   lv_obj_t* no_plugins_overlay_label_ = nullptr;

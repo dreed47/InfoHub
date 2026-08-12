@@ -166,6 +166,20 @@ void Application::run() {
   if (audio_notifier_.initialize() != ESP_OK) {
     ESP_LOGW(kTag, "Audio notifier init failed - sound disabled this boot");
   }
+
+  // Every compiled-in plugin's generic-page-pool size must be known before
+  // ui_.initialize() builds the pager, so the pool's LVGL containers can be
+  // created up front alongside every other page. PrinterPlugin doesn't
+  // participate (page_count() stays 0 — its pages predate this pool and stay
+  // Ui-hardcoded), so this only sums weather/stocks/future-plugin counts.
+  uint16_t plugin_page_total = 0;
+  for (Plugin* plugin : plugins_) {
+    if (plugin != nullptr) {
+      plugin_page_total = static_cast<uint16_t>(plugin_page_total + plugin->page_count());
+    }
+  }
+  ui_.reserve_plugin_page_pool(plugin_page_total);
+
   ESP_ERROR_CHECK(ui_.initialize());
 
   PluginContext plugin_ctx{config_store_, wifi_manager_,   ui_,
@@ -179,10 +193,20 @@ void Application::run() {
 
   // build_screen() runs after init() so plugins that need their own
   // core-service refs (e.g. PrinterPlugin::ui_) have them set first.
-  printer_plugin_.build_screen(ui_.printer_select_page_container());
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  weather_plugin_.build_screen(ui_.plugin_page_container());
-#endif
+  printer_plugin_.build_screen(ui_.printer_select_page_container(), 0);
+  for (Plugin* plugin : plugins_) {
+    if (plugin == nullptr) {
+      continue;
+    }
+    const uint8_t page_count = plugin->page_count();
+    if (page_count == 0) {
+      continue;
+    }
+    const int base = ui_.register_plugin_pages(plugin->id(), page_count);
+    for (uint8_t i = 0; i < page_count; ++i) {
+      plugin->build_screen(ui_.plugin_page_container(base + i), i);
+    }
+  }
 
   ESP_LOGI(kTag, "Bootstrap complete");
 

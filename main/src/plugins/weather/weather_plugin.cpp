@@ -72,7 +72,7 @@ bool WeatherPlugin::wants_network() const {
   return client_.snapshot().configured;
 }
 
-void WeatherPlugin::build_screen(lv_obj_t* parent) {
+void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
   if (parent == nullptr) {
     return;
   }
@@ -119,7 +119,7 @@ void WeatherPlugin::update_ui() {
   }
 
   const WeatherFlowSnapshot snapshot = client_.snapshot();
-  ui_->set_plugin_page_enabled(snapshot.configured);
+  ui_->set_plugin_pages_enabled(id(), snapshot.configured);
   if (!snapshot.configured) {
     return;
   }

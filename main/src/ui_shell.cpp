@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "driver/gpio.h"
 #include "esp_lv_adapter.h"
@@ -47,7 +48,7 @@ lv_obj_t* UiShell::page_object(int page) const {
 
 int UiShell::next_enabled_page(int page, int direction) const {
   int candidate = page + direction;
-  while (candidate >= 0 && candidate <= kPageIdxLast) {
+  while (candidate >= 0 && candidate <= last_page_index()) {
     if (page_enabled(candidate)) {
       return candidate;
     }
@@ -57,7 +58,7 @@ int UiShell::next_enabled_page(int page, int direction) const {
 }
 
 bool UiShell::any_page_enabled() const {
-  for (int page = 0; page <= kPageIdxLast; ++page) {
+  for (int page = 0; page <= last_page_index(); ++page) {
     if (page_enabled(page)) {
       return true;
     }
@@ -70,13 +71,41 @@ int UiShell::clamp_enabled_page(int page) const {
     return page;
   }
 
-  for (int candidate = 0; candidate <= kPageIdxLast; ++candidate) {
+  for (int candidate = 0; candidate <= last_page_index(); ++candidate) {
     if (page_enabled(candidate)) {
       return candidate;
     }
   }
 
   return 0;
+}
+
+void UiShell::configure_generic_page_pool(uint16_t total_pages) {
+  page_slots_.resize(static_cast<size_t>(kPageIdxGenericFirst) + total_pages);
+}
+
+int UiShell::reserve_plugin_pages(const char* plugin_id, uint8_t count) {
+  const int base = kPageIdxGenericFirst + next_generic_offset_;
+  next_generic_offset_ = static_cast<uint16_t>(next_generic_offset_ + count);
+  if (plugin_page_range_count_ < plugin_page_ranges_.size()) {
+    plugin_page_ranges_[plugin_page_range_count_++] = {plugin_id, base, count};
+  }
+  return base;
+}
+
+bool UiShell::plugin_page_range(const char* plugin_id, int* base, uint8_t* count) const {
+  for (uint8_t i = 0; i < plugin_page_range_count_; ++i) {
+    if (std::strcmp(plugin_page_ranges_[i].id, plugin_id) == 0) {
+      if (base != nullptr) {
+        *base = plugin_page_ranges_[i].base;
+      }
+      if (count != nullptr) {
+        *count = plugin_page_ranges_[i].count;
+      }
+      return true;
+    }
+  }
+  return false;
 }
 
 int UiShell::nearest_enabled_page_for_scroll(int active_page) const {
@@ -96,7 +125,7 @@ int UiShell::nearest_enabled_page_for_scroll(int active_page) const {
   int best_page = clamp_enabled_page(active_page);
   int best_distance = INT32_MAX;
 
-  for (int page = 0; page <= kPageIdxLast; ++page) {
+  for (int page = 0; page <= last_page_index(); ++page) {
     if (!page_enabled(page)) {
       continue;
     }

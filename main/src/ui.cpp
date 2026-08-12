@@ -1272,7 +1272,7 @@ void Ui::apply_page0_parallax(bool force) {
   // the generic plugin page) would otherwise inherit whatever state this
   // left them in. Plugin pages are printer-agnostic by design, so force both
   // hidden while settled there, on top of the normal scroll-based fade.
-  const bool on_plugin_page = !scrolling_ && active_page_ == kPageIdxPluginPage;
+  const bool on_plugin_page = !scrolling_ && active_page_ >= kPageIdxGenericFirst;
 
   // fixed_overlay_ contains the full-screen arc (466×466 px).  Setting opa to any
   // fractional value forces LVGL to render the entire widget tree into a 24 KB
@@ -2382,8 +2382,17 @@ esp_err_t Ui::build_dashboard() {
   page1_ = create_page(pager);
   page2_ = create_page(pager);
   page3_ = create_page(pager);
-  plugin_page_ = create_page(pager);
-  enable_touch_bubble(plugin_page_);
+  // plugin_pool_size_ was set by reserve_plugin_page_pool() before
+  // initialize() ran (Application does this once, summing every compiled-in
+  // plugin's page_count()); allocate at least 1 slot so the unique_ptr is
+  // never null even when no plugin wants a generic page.
+  plugin_pages_ = std::make_unique<lv_obj_t*[]>(plugin_pool_size_ > 0 ? plugin_pool_size_ : 1);
+  plugin_pages_enabled_ = std::make_unique<bool[]>(plugin_pool_size_ > 0 ? plugin_pool_size_ : 1);
+  for (uint16_t i = 0; i < plugin_pool_size_; ++i) {
+    plugin_pages_[i] = create_page(pager);
+    plugin_pages_enabled_[i] = false;
+    enable_touch_bubble(plugin_pages_[i]);
+  }
   enable_touch_bubble(page0_);
   enable_touch_bubble(page1_);
   enable_touch_bubble(page2_);
@@ -2391,7 +2400,7 @@ esp_err_t Ui::build_dashboard() {
 
   // Page 0 (printer-selector) content is built by PrinterPlugin::build_screen()
   // against printer_select_page_container() — Ui only creates the bare page
-  // container above (same as plugin_page_).
+  // container above (same as the generic plugin pages built in the loop above).
 
   // --- AMS pages (one per AMS unit, indices kPageIdxAmsFirst..kPageIdxAmsLast) ---
   // Build all kMaxAmsUnits AMS pages up front; each page is hidden until the
@@ -2994,16 +3003,60 @@ void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
   update_no_plugins_overlay_locked();
 }
 
-void Ui::set_plugin_page_enabled(bool enabled) {
-  LvglLockGuard lock(200, "set_plugin_page_enabled");
+void Ui::reserve_plugin_page_pool(uint16_t total_pages) {
+  plugin_pool_size_ = total_pages;
+  ui_shell_.configure_generic_page_pool(total_pages);
+}
+
+int Ui::register_plugin_pages(const char* plugin_id, uint8_t count) {
+  if (count == 0) {
+    return -1;
+  }
+  const int base = ui_shell_.reserve_plugin_pages(plugin_id, count);
+  const int local_offset = base - kPageIdxGenericFirst;
+  if (local_offset < 0 || static_cast<uint16_t>(local_offset + count) > plugin_pool_size_) {
+    return base;
+  }
+  for (uint8_t i = 0; i < count; ++i) {
+    ui_shell_.register_page_slot(base + i, &plugin_pages_[local_offset + i],
+                                  &plugin_pages_enabled_[local_offset + i]);
+  }
+  return base;
+}
+
+lv_obj_t* Ui::plugin_page_container(int page_index) const {
+  const int local_offset = page_index - kPageIdxGenericFirst;
+  if (local_offset < 0 || static_cast<uint16_t>(local_offset) >= plugin_pool_size_) {
+    return nullptr;
+  }
+  return plugin_pages_[local_offset];
+}
+
+void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled) {
+  LvglLockGuard lock(200, "set_plugin_pages_enabled");
   if (!lock.locked()) {
     return;
   }
-  if (plugin_page_enabled_ == enabled) {
+  int base = 0;
+  uint8_t count = 0;
+  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || count == 0) {
     return;
   }
-  plugin_page_enabled_ = enabled;
-  set_hidden(plugin_page_, !enabled);
+  const int local_offset = base - kPageIdxGenericFirst;
+  if (local_offset < 0 || static_cast<uint16_t>(local_offset + count) > plugin_pool_size_) {
+    return;
+  }
+  bool changed = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (plugin_pages_enabled_[local_offset + i] != enabled) {
+      plugin_pages_enabled_[local_offset + i] = enabled;
+      changed = true;
+    }
+    set_hidden(plugin_pages_[local_offset + i], !enabled);
+  }
+  if (!changed) {
+    return;
+  }
   active_page_ = clamp_enabled_page(active_page_);
   lv_obj_update_layout(ui_shell_.pager());
   if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
@@ -3028,7 +3081,10 @@ void Ui::register_page_slots() {
   ui_shell_.register_page_slot(kPageIdxMain, &page1_, &printer_plugin_enabled_);
   ui_shell_.register_page_slot(kPageIdxPreview, &page2_, &preview_page_available_);
   ui_shell_.register_page_slot(kPageIdxCamera, &page3_, &camera_page_available_);
-  ui_shell_.register_page_slot(kPageIdxPluginPage, &plugin_page_, &plugin_page_enabled_);
+  // Generic plugin pages register themselves individually via
+  // register_plugin_pages(), called once per plugin from Application after
+  // initialize() runs — not enumerated here since the set of plugins (and
+  // how many pages each wants) isn't known to Ui itself.
 }
 
 lv_obj_t* Ui::page_object(int page) const { return ui_shell_.page_object(page); }

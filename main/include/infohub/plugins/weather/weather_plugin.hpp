@@ -9,11 +9,10 @@ class Ui;
 
 // First real second Plugin implementation (weather, via WeatherFlow's cloud
 // REST API for a Tempest station) — see CLAUDE.md's "Phased extraction
-// sequencing plan" Phase 9/10. build_screen() renders into Ui's one reserved
-// generic plugin-page slot (Ui::plugin_page_container()) — see the
-// investigation notes in CLAUDE.md/plan history for why that's a small,
-// additive slot rather than the (still-deferred) generic multi-plugin page
-// pool.
+// sequencing plan" Phase 9/10. build_screen() renders into a page reserved
+// from Ui's generic plugin-page pool (Ui::plugin_page_container()) via
+// page_count()/register_plugin_pages() — the same mechanism any other
+// non-printer plugin (e.g. a future stocks plugin) uses.
 class WeatherPlugin : public Plugin {
  public:
   WeatherPlugin() = default;
@@ -29,8 +28,9 @@ class WeatherPlugin : public Plugin {
   bool wants_awake() const override { return false; }
   uint32_t desired_poll_interval_ms() const override { return 5000; }
 
+  uint8_t page_count() const override { return 1; }
   void build_tile(lv_obj_t*) override {}
-  void build_screen(lv_obj_t* parent) override;
+  void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
   std::string portal_settings_html() const override { return {}; }
   void load_config() override;

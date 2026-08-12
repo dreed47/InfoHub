@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 #include "lvgl.h"
 #include "infohub/config_store.hpp"
@@ -41,13 +42,11 @@ class UiShell {
   static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
   static constexpr int kPageIdxPreview = kPageIdxMain + 1;
   static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  // One generic reserved slot for a plugin's own on-device screen (see
-  // Ui::plugin_page_container()/set_plugin_page_enabled()). Deliberately not
-  // named after any specific plugin — Ui stays plugin-agnostic. Single slot
-  // for now since there's exactly one real consumer (weather); growing this
-  // to a pool is a follow-up once a second plugin wants a screen too.
-  static constexpr int kPageIdxPluginPage = kPageIdxCamera + 1;
-  static constexpr int kPageIdxLast = kPageIdxPluginPage;
+  // Fixed core pages end at kPageIdxCamera. Beyond that is a generic pool of
+  // plugin-owned pages, sized exactly to the sum of every compiled-in
+  // plugin's declared Plugin::page_count() — no plugin gets a hardcoded slot
+  // here by name. See configure_generic_page_pool()/reserve_plugin_pages().
+  static constexpr int kPageIdxGenericFirst = kPageIdxCamera + 1;
 
   // --- Page registry: page_enabled()/page_object() table, see Phase 6 ---
   void register_page_slot(int index, lv_obj_t* const* object, const bool* enabled_flag);
@@ -60,6 +59,23 @@ class UiShell {
   // decide whether the pager has anything to show at all, vs. every plugin
   // having been disabled in Web Config.
   bool any_page_enabled() const;
+  // Highest valid kPageIdx-space index currently registered (core pages +
+  // however many generic pages configure_generic_page_pool() reserved).
+  int last_page_index() const { return static_cast<int>(page_slots_.size()) - 1; }
+
+  // Resizes the page-slot table to fit `total_pages` generic plugin pages
+  // beyond the fixed core set. Call once, before any reserve_plugin_pages()
+  // call — Ui does this right after construction, before initialize().
+  void configure_generic_page_pool(uint16_t total_pages);
+  // Assigns `count` consecutive generic-pool indices to `plugin_id`, in call
+  // order (first plugin to call this gets kPageIdxGenericFirst, etc).
+  // Returns the base kPageIdx-space index (>= kPageIdxGenericFirst).
+  int reserve_plugin_pages(const char* plugin_id, uint8_t count);
+  // Looks up a previously-reserved range by plugin id — e.g. so an
+  // enable/disable toggle can find which slots are "mine" without the
+  // caller having to remember its own base index. False if this id never
+  // called reserve_plugin_pages().
+  bool plugin_page_range(const char* plugin_id, int* base, uint8_t* count) const;
 
   // --- Pager object + scroll lock ---
   void bind_pager(lv_obj_t* pager) { pager_ = pager; }
@@ -91,9 +107,21 @@ class UiShell {
     lv_obj_t* const* object = nullptr;
     const bool* enabled_flag = nullptr;
   };
-  std::array<PageSlot, kPageIdxLast + 1> page_slots_{};
+  // Pre-sized to the fixed core pages; configure_generic_page_pool() extends
+  // it once with however many generic plugin pages are actually needed.
+  std::vector<PageSlot> page_slots_ = std::vector<PageSlot>(kPageIdxGenericFirst);
   lv_obj_t* pager_ = nullptr;
   bool pager_scroll_locked_ = false;
+
+  uint16_t next_generic_offset_ = 0;
+  static constexpr uint8_t kMaxPluginPageRanges = 8;
+  struct PluginPageRange {
+    const char* id = nullptr;
+    int base = 0;
+    uint8_t count = 0;
+  };
+  std::array<PluginPageRange, kMaxPluginPageRanges> plugin_page_ranges_{};
+  uint8_t plugin_page_range_count_ = 0;
 
   ScreenPowerMode screen_power_mode_ = ScreenPowerMode::kAwake;
   int user_brightness_percent_ = 80;

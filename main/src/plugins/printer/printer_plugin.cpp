@@ -465,7 +465,7 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   return ESP_OK;
 }
 
-void PrinterPlugin::build_screen(lv_obj_t* parent) {
+void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
   title_ = lv_label_create(parent);
   set_label_text_if_changed(title_, "Printers");
   lv_obj_set_width(title_, 320);

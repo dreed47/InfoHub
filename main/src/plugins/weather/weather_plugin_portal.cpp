@@ -140,7 +140,7 @@ esp_err_t WeatherPlugin::handle_enabled_post(httpd_req_t* request) {
     // Application's update_ui() loop skips disabled plugins, so the pager
     // wouldn't otherwise notice the page should stop being offered — hide it
     // immediately rather than leaving it enabled at its last-known state.
-    plugin->ui_->set_plugin_page_enabled(false);
+    plugin->ui_->set_plugin_pages_enabled(plugin->id(), false);
   }
 
   send_json(request, "{\"status\":\"saved\"}");

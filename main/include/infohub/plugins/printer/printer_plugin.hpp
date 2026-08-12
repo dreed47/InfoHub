@@ -54,7 +54,7 @@ class PrinterPlugin : public Plugin {
   void build_tile(lv_obj_t*) override {}
   // Builds the printer-selector page0 content (title/card list/empty note)
   // into the container Ui hands out via printer_select_page_container().
-  void build_screen(lv_obj_t* parent) override;
+  void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
   std::string portal_settings_html() const override { return {}; }
   void load_config() override {}
