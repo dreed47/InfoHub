@@ -1,0 +1,196 @@
+// Portal routes for StocksPlugin, split from stocks_plugin.cpp the same way
+// weather_plugin_portal.cpp splits off WeatherPlugin's routes.
+
+#include "infohub/plugins/stocks/stocks_plugin.hpp"
+
+#include <cstdlib>
+
+#include "cJSON.h"
+#include "infohub/config_store.hpp"
+#include "infohub/portal_shared.hpp"
+#include "infohub/setup_portal.hpp"
+#include "infohub/ui.hpp"
+
+namespace infohub {
+
+namespace {
+constexpr char kPluginNs[] = "stocks";
+
+// Same empty-submission-reuses-stored-value convention as WeatherPlugin's
+// merge_secret -- the settings card never echoes the saved key back, so a
+// blank field on submit means "keep the current one".
+std::string merge_secret(const std::string& submitted, const std::string& stored) {
+  return submitted.empty() ? stored : submitted;
+}
+}  // namespace
+
+esp_err_t StocksPlugin::handle_config_get(httpd_req_t* request) {
+  auto* plugin = static_cast<StocksPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  const std::string poll_s_str = plugin->config_store_->load_plugin_string(kPluginNs, "poll_s");
+  const StockSnapshot snapshot = plugin->client_.snapshot();
+
+  std::string body = "{\"symbols\":[";
+  for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
+    const std::string key = "symbol" + std::to_string(i + 1);
+    const std::string symbol = plugin->config_store_->load_plugin_string(kPluginNs, key.c_str());
+    if (i > 0) {
+      body += ",";
+    }
+    body += "\"" + json_escape(symbol) + "\"";
+  }
+  body += "],\"poll_s\":";
+  body += poll_s_str.empty() ? "21600" : poll_s_str;
+  body += ",\"enabled\":";
+  body += plugin->enabled() ? "true" : "false";
+  body += ",\"configured\":";
+  body += snapshot.configured ? "true" : "false";
+  body += ",\"last_fetch_ok\":";
+  body += snapshot.last_fetch_ok ? "true" : "false";
+  body += ",\"last_error\":\"" + json_escape(snapshot.last_error) + "\"";
+  body += ",\"quotes\":[";
+  for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
+    if (i > 0) {
+      body += ",";
+    }
+    const StockQuote& quote = snapshot.quotes[i];
+    body += "{\"symbol\":\"" + json_escape(quote.symbol) + "\",\"has_data\":";
+    body += quote.has_data ? "true" : "false";
+    if (quote.has_data) {
+      body += ",\"price\":" + std::to_string(quote.price);
+      body += ",\"change\":" + std::to_string(quote.change);
+      body += ",\"change_percent\":" + std::to_string(quote.change_percent);
+    }
+    body += "}";
+  }
+  body += "]}";
+  send_json(request, body);
+  return ESP_OK;
+}
+
+esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
+  auto* plugin = static_cast<StocksPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  cJSON* root = nullptr;
+  const esp_err_t parse_err = receive_json_body(request, &root);
+  if (parse_err != ESP_OK) {
+    return parse_err;
+  }
+
+  std::array<std::string, kStockSymbolCount> symbols{};
+  if (root != nullptr) {
+    const cJSON* symbols_field = cJSON_GetObjectItemCaseSensitive(root, "symbols");
+    if (cJSON_IsArray(symbols_field)) {
+      const int count = cJSON_GetArraySize(symbols_field);
+      for (int i = 0; i < count && i < kStockSymbolCount; ++i) {
+        const cJSON* item = cJSON_GetArrayItem(symbols_field, i);
+        if (cJSON_IsString(item) && item->valuestring != nullptr) {
+          symbols[i] = trim_copy(std::string(item->valuestring));
+        }
+      }
+    }
+  }
+  const std::string submitted_api_token = read_string_field(root, "api_token");
+  const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
+  cJSON_Delete(root);
+
+  const std::string stored_api_token =
+      plugin->config_store_->load_plugin_string(kPluginNs, "api_token");
+  const std::string api_token = merge_secret(submitted_api_token, stored_api_token);
+
+  // Free-tier Alpha Vantage is 25 requests/day; 4 symbols = 4 requests per
+  // poll cycle, so anything under ~1h risks burning the daily budget in a
+  // handful of cycles -- floor at 1h rather than weather's 1min floor.
+  uint32_t poll_interval_s = 21600;
+  if (!poll_s_field.empty()) {
+    poll_interval_s = static_cast<uint32_t>(std::strtoul(poll_s_field.c_str(), nullptr, 10));
+    if (poll_interval_s < 3600) {
+      poll_interval_s = 3600;
+    }
+  }
+
+  for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
+    const std::string key = "symbol" + std::to_string(i + 1);
+    plugin->config_store_->save_plugin_string(kPluginNs, key.c_str(), symbols[i]);
+  }
+  plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
+  plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
+
+  plugin->client_.configure(symbols, api_token, poll_interval_s);
+
+  send_json(request, "{\"status\":\"saved\"}");
+  return ESP_OK;
+}
+
+// Separate from handle_config_post so toggling the checkbox can apply
+// instantly without risking a partial payload wiping symbols/key -- same
+// split WeatherPlugin/PrinterPlugin use for their own enabled toggles.
+esp_err_t StocksPlugin::handle_enabled_post(httpd_req_t* request) {
+  auto* plugin = static_cast<StocksPlugin*>(request->user_ctx);
+  if (plugin == nullptr) {
+    return ESP_FAIL;
+  }
+  if (!plugin->setup_portal_->is_request_authorized(request)) {
+    return plugin->setup_portal_->send_locked_response(request);
+  }
+
+  cJSON* root = nullptr;
+  const esp_err_t parse_err = receive_json_body(request, &root);
+  if (parse_err != ESP_OK) {
+    return parse_err;
+  }
+  const bool enabled = read_bool_field(root, "enabled", plugin->enabled());
+  cJSON_Delete(root);
+
+  plugin->config_store_->save_plugin_string(kPluginNs, "enabled", enabled ? "1" : "0");
+  plugin->set_enabled(enabled);
+  if (!enabled && plugin->ui_ != nullptr) {
+    // Application's update_ui() loop skips disabled plugins, so the pager
+    // wouldn't otherwise notice the page should stop being offered -- hide
+    // it immediately. This runs on SetupPortal's HTTP task, racing the main
+    // task for the LVGL lock, with no next update_ui() tick to retry a lost
+    // race on -- same fix as WeatherPlugin's/PrinterPlugin's equivalent
+    // portal handlers (see set_plugin_pages_enabled()'s lock_timeout_ms doc).
+    plugin->ui_->set_plugin_pages_enabled(plugin->id(), false, /*lock_timeout_ms=*/2000);
+  }
+
+  send_json(request, "{\"status\":\"saved\"}");
+  return ESP_OK;
+}
+
+void StocksPlugin::register_portal_routes(httpd_handle_t server) {
+  httpd_uri_t get_uri = {};
+  get_uri.uri = "/api/plugins/stocks/config";
+  get_uri.method = HTTP_GET;
+  get_uri.handler = &StocksPlugin::handle_config_get;
+  get_uri.user_ctx = this;
+  httpd_register_uri_handler(server, &get_uri);
+
+  httpd_uri_t post_uri = {};
+  post_uri.uri = "/api/plugins/stocks/config";
+  post_uri.method = HTTP_POST;
+  post_uri.handler = &StocksPlugin::handle_config_post;
+  post_uri.user_ctx = this;
+  httpd_register_uri_handler(server, &post_uri);
+
+  httpd_uri_t enabled_uri = {};
+  enabled_uri.uri = "/api/plugins/stocks/enabled";
+  enabled_uri.method = HTTP_POST;
+  enabled_uri.handler = &StocksPlugin::handle_enabled_post;
+  enabled_uri.user_ctx = this;
+  httpd_register_uri_handler(server, &enabled_uri);
+}
+
+}  // namespace infohub

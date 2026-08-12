@@ -90,6 +90,9 @@ Application::Application()
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   plugins_[1] = &weather_plugin_;
 #endif
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+  plugins_[2] = &stocks_plugin_;
+#endif
 }
 
 void Application::run() {

@@ -32,6 +32,14 @@ if(CONFIG_INFOHUB_PLUGIN_WEATHER)
     )
 endif()
 
+if(CONFIG_INFOHUB_PLUGIN_STOCKS)
+    list(APPEND INFOHUB_PLUGIN_SRCS
+        "src/plugins/stocks/stock_client.cpp"
+        "src/plugins/stocks/stocks_plugin.cpp"
+        "src/plugins/stocks/stocks_plugin_portal.cpp"
+    )
+endif()
+
 if("${INFOHUB_HW_COMPILE_DEFINE}" STREQUAL "INFOHUB_HW_VARIANT_AMOLED_1_75=1")
     list(APPEND INFOHUB_MAIN_PRIV_REQUIRES
         XPowersLib

@@ -11,6 +11,20 @@ menu "InfoHub"
             (Web Config only). Disabled by default to keep flash/RAM budget
             down on builds that don't want it.
 
+    config INFOHUB_PLUGIN_STOCKS
+        bool "Enable stocks plugin (Alpha Vantage cloud API)"
+        default n
+        help
+            Enables the stocks plugin: fetches quotes for up to 4 tracked
+            ticker symbols from Alpha Vantage's cloud REST API (personal API
+            key, entered in Web Config). Adds a "Stocks" card to Web Config
+            and a display screen showing each symbol's price with a colored
+            circle (green up / red down for the day). Free-tier Alpha
+            Vantage accounts are capped at 25 requests/day, so quotes poll
+            infrequently (hours, not minutes) and free-tier data itself only
+            refreshes once per trading day. Disabled by default to keep
+            flash/RAM budget down on builds that don't want it.
+
     config INFOHUB_EXPERIMENTAL_PRINT_CONTROL
         bool "Enable experimental print control buttons (Pause/Resume/Stop)"
         default n

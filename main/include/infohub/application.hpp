@@ -15,6 +15,9 @@
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
 #include "infohub/plugins/weather/weather_plugin.hpp"
 #endif
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+#include "infohub/plugins/stocks/stocks_plugin.hpp"
+#endif
 
 namespace infohub {
 
@@ -38,6 +41,9 @@ class Application {
   PrinterPlugin printer_plugin_{};
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   WeatherPlugin weather_plugin_{};
+#endif
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+  StocksPlugin stocks_plugin_{};
 #endif
   SetupPortal setup_portal_;
   SerialProvisioner serial_provisioner_;
