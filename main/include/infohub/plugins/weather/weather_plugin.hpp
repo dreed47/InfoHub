@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include "infohub/plugin.hpp"
 #include "infohub/plugins/weather/weather_flow_client.hpp"
 
@@ -29,9 +31,9 @@ class WeatherPlugin : public Plugin {
   uint32_t desired_poll_interval_ms() const override { return 5000; }
 
   // page_index 0: temp/humidity/pressure summary. page_index 1: wind/UV/
-  // precip/station-battery — exercises the generic multi-page plugin pool
-  // (Ui::register_plugin_pages()) with a second real page, not a placeholder.
-  uint8_t page_count() const override { return 2; }
+  // precip/station-battery. page_index 2: next-4-hours forecast strip
+  // (WeatherFlowClient's better_forecast fetch).
+  uint8_t page_count() const override { return 3; }
   void build_tile(lv_obj_t*) override {}
   void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
@@ -66,6 +68,15 @@ class WeatherPlugin : public Plugin {
   // Page 1 widgets — wind/UV/precip/station-battery.
   lv_obj_t* extra_title_label_ = nullptr;
   lv_obj_t* extra_detail_label_ = nullptr;
+
+  // Page 2 widgets — one column per forecast hour: time, temp, conditions
+  // (text, not icons — see the plan doc for why).
+  struct ForecastColumn {
+    lv_obj_t* time_label = nullptr;
+    lv_obj_t* temp_label = nullptr;
+    lv_obj_t* conditions_label = nullptr;
+  };
+  std::array<ForecastColumn, kHourlyForecastCount> forecast_columns_{};
 };
 
 }  // namespace infohub
