@@ -72,7 +72,7 @@ bool WeatherPlugin::wants_network() const {
   return client_.snapshot().configured;
 }
 
-void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
+void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   if (parent == nullptr) {
     return;
   }
@@ -92,23 +92,38 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
   lv_obj_set_style_pad_row(column, 8, 0);
   lv_obj_center(column);
 
-  temp_label_ = lv_label_create(column);
-  lv_label_set_text(temp_label_, "--");
-  lv_obj_set_style_text_font(temp_label_, &dosis_40, 0);
-  lv_obj_set_style_text_color(temp_label_, lv_color_hex(0xFFFFFF), 0);
+  if (page_index == 0) {
+    temp_label_ = lv_label_create(column);
+    lv_label_set_text(temp_label_, "--");
+    lv_obj_set_style_text_font(temp_label_, &dosis_40, 0);
+    lv_obj_set_style_text_color(temp_label_, lv_color_hex(0xFFFFFF), 0);
 
-  detail_label_ = lv_label_create(column);
-  lv_label_set_text(detail_label_, "");
-  lv_obj_set_style_text_font(detail_label_, &dosis_20, 0);
-  lv_obj_set_style_text_color(detail_label_, lv_color_hex(0xCCCCCC), 0);
+    detail_label_ = lv_label_create(column);
+    lv_label_set_text(detail_label_, "");
+    lv_obj_set_style_text_font(detail_label_, &dosis_20, 0);
+    lv_obj_set_style_text_color(detail_label_, lv_color_hex(0xCCCCCC), 0);
 
-  status_label_ = lv_label_create(column);
-  lv_label_set_text(status_label_, "Not configured");
-  lv_obj_set_width(status_label_, 320);
-  lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(status_label_, &dosis_20, 0);
-  lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
+    status_label_ = lv_label_create(column);
+    lv_label_set_text(status_label_, "Not configured");
+    lv_obj_set_width(status_label_, 320);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(status_label_, &dosis_20, 0);
+    lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
+  } else {
+    extra_title_label_ = lv_label_create(column);
+    lv_label_set_text(extra_title_label_, "Wind & More");
+    lv_obj_set_style_text_font(extra_title_label_, &dosis_40, 0);
+    lv_obj_set_style_text_color(extra_title_label_, lv_color_hex(0xFFFFFF), 0);
+
+    extra_detail_label_ = lv_label_create(column);
+    lv_label_set_text(extra_detail_label_, "--");
+    lv_obj_set_width(extra_detail_label_, 320);
+    lv_label_set_long_mode(extra_detail_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(extra_detail_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(extra_detail_label_, &dosis_20, 0);
+    lv_obj_set_style_text_color(extra_detail_label_, lv_color_hex(0xCCCCCC), 0);
+  }
 
   bsp_display_unlock();
 }
@@ -145,6 +160,34 @@ void WeatherPlugin::update_ui() {
     lv_label_set_text(status_label_,
                       snapshot.last_error.empty() ? "Waiting for first fetch..."
                                                    : snapshot.last_error.c_str());
+  }
+
+  if (extra_detail_label_ != nullptr) {
+    std::string extra;
+    if (snapshot.has_wind) {
+      char wind_buf[64];
+      std::snprintf(wind_buf, sizeof(wind_buf), "Wind: %.1f m/s (gust %.1f) @ %.0f\xC2\xB0\n",
+                    snapshot.wind_avg_mps, snapshot.wind_gust_mps, snapshot.wind_direction_deg);
+      extra += wind_buf;
+    }
+    if (snapshot.has_uv) {
+      char uv_buf[32];
+      std::snprintf(uv_buf, sizeof(uv_buf), "UV index: %.1f\n", snapshot.uv_index);
+      extra += uv_buf;
+    }
+    if (snapshot.has_precip) {
+      char precip_buf[48];
+      std::snprintf(precip_buf, sizeof(precip_buf), "Precip: %.2f mm\n",
+                    snapshot.precip_accumulated_mm);
+      extra += precip_buf;
+    }
+    if (snapshot.has_battery) {
+      char battery_buf[32];
+      std::snprintf(battery_buf, sizeof(battery_buf), "Station battery: %.2f V",
+                    snapshot.battery_volts);
+      extra += battery_buf;
+    }
+    lv_label_set_text(extra_detail_label_, extra.empty() ? "--" : extra.c_str());
   }
 
   bsp_display_unlock();

@@ -28,7 +28,10 @@ class WeatherPlugin : public Plugin {
   bool wants_awake() const override { return false; }
   uint32_t desired_poll_interval_ms() const override { return 5000; }
 
-  uint8_t page_count() const override { return 1; }
+  // page_index 0: temp/humidity/pressure summary. page_index 1: wind/UV/
+  // precip/station-battery — exercises the generic multi-page plugin pool
+  // (Ui::register_plugin_pages()) with a second real page, not a placeholder.
+  uint8_t page_count() const override { return 2; }
   void build_tile(lv_obj_t*) override {}
   void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
@@ -55,10 +58,14 @@ class WeatherPlugin : public Plugin {
 
   WeatherFlowClient client_{};
 
-  // Screen widgets, built once in build_screen(), updated in update_ui().
+  // Page 0 widgets, built once in build_screen(), updated in update_ui().
   lv_obj_t* temp_label_ = nullptr;
   lv_obj_t* detail_label_ = nullptr;
   lv_obj_t* status_label_ = nullptr;
+
+  // Page 1 widgets — wind/UV/precip/station-battery.
+  lv_obj_t* extra_title_label_ = nullptr;
+  lv_obj_t* extra_detail_label_ = nullptr;
 };
 
 }  // namespace infohub
