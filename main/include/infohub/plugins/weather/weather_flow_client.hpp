@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -12,6 +13,19 @@
 namespace infohub {
 
 class WifiManager;
+
+constexpr uint8_t kHourlyForecastCount = 4;
+
+// One hour's entry from WeatherFlow's better_forecast endpoint
+// (forecast.hourly[]). `has_data` is set only if the entry parsed with at
+// least a temperature reading.
+struct HourlyForecastEntry {
+  uint64_t time_unix = 0;
+  double air_temperature_c = 0.0;
+  std::string conditions;
+  double precip_probability = 0.0;
+  bool has_data = false;
+};
 
 // Latest fetched conditions for one WeatherFlow Tempest station. `configured`
 // is true once a station_id + api_token have been set; `last_fetch_ok` and
@@ -44,6 +58,12 @@ struct WeatherFlowSnapshot {
   double precip_accumulated_mm = 0.0;
   bool has_battery = false;
   double battery_volts = 0.0;
+
+  // Next kHourlyForecastCount hours from the better_forecast endpoint --
+  // fetched on its own, slower cadence (see task_loop()), independent of
+  // the observation poll interval above.
+  bool has_forecast = false;
+  std::array<HourlyForecastEntry, kHourlyForecastCount> hourly_forecast{};
 };
 
 // Polls WeatherFlow's cloud REST API (https://swd.weatherflow.com/swd/rest/
@@ -81,9 +101,11 @@ class WeatherFlowClient {
   static void task_entry(void* context);
   void task_loop();
   bool fetch_once();
+  bool fetch_forecast_once();
   bool perform_json_request(const std::string& url, int* status_code,
                             std::string* response_body);
   void parse_observation_response(const std::string& body, WeatherFlowSnapshot* out);
+  void parse_forecast_response(const std::string& body, WeatherFlowSnapshot* out);
 
   TaskHandle_t task_handle_ = nullptr;
   const WifiManager* wifi_manager_ = nullptr;

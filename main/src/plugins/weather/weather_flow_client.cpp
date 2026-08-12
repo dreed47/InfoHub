@@ -1,5 +1,6 @@
 #include "infohub/plugins/weather/weather_flow_client.hpp"
 
+#include <algorithm>
 #include <cerrno>
 
 #include "cJSON.h"
@@ -15,6 +16,11 @@ namespace {
 constexpr char kTag[] = "infohub.weather";
 constexpr size_t kMaxJsonResponseBytes = 16U * 1024U;
 constexpr char kUrlPrefix[] = "https://swd.weatherflow.com/swd/rest/observations/station/";
+constexpr char kForecastUrlPrefix[] = "https://swd.weatherflow.com/swd/rest/better_forecast";
+// Forecast doesn't need observation's 5-minute freshness -- refetch hourly,
+// independent of the (usually much shorter) poll_interval_s used for
+// observations. See task_loop()'s second `forecast_due` check.
+constexpr uint32_t kForecastIntervalS = 3600;
 
 uint64_t now_ms() {
   return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
@@ -29,6 +35,18 @@ bool read_number(const cJSON* object, const char* key, double* out) {
     return false;
   }
   *out = item->valuedouble;
+  return true;
+}
+
+bool read_string(const cJSON* object, const char* key, std::string* out) {
+  if (object == nullptr || out == nullptr) {
+    return false;
+  }
+  const cJSON* item = cJSON_GetObjectItemCaseSensitive(object, key);
+  if (!cJSON_IsString(item) || item->valuestring == nullptr) {
+    return false;
+  }
+  *out = item->valuestring;
   return true;
 }
 
@@ -68,6 +86,7 @@ void WeatherFlowClient::task_entry(void* context) {
 
 void WeatherFlowClient::task_loop() {
   TickType_t last_fetch_tick = 0;
+  TickType_t last_forecast_fetch_tick = 0;
   while (true) {
     reconfigure_requested_.store(false);
 
@@ -97,6 +116,14 @@ void WeatherFlowClient::task_loop() {
     if (configured && due && wifi_ready) {
       last_fetch_tick = now_tick;
       fetch_once();
+    }
+
+    const TickType_t forecast_elapsed_ticks = now_tick - last_forecast_fetch_tick;
+    const bool forecast_due = last_forecast_fetch_tick == 0 ||
+                              forecast_elapsed_ticks >= pdMS_TO_TICKS(kForecastIntervalS * 1000ULL);
+    if (configured && forecast_due && wifi_ready) {
+      last_forecast_fetch_tick = now_tick;
+      fetch_forecast_once();
     }
 
     if (!configured) {
@@ -172,6 +199,52 @@ bool WeatherFlowClient::fetch_once() {
   return updated.last_fetch_ok;
 }
 
+bool WeatherFlowClient::fetch_forecast_once() {
+  std::string station_id;
+  std::string api_token;
+  {
+    std::lock_guard<std::mutex> lock(config_mutex_);
+    station_id = station_id_;
+    api_token = api_token_;
+  }
+  if (station_id.empty() || api_token.empty()) {
+    return false;
+  }
+
+  const std::string url = std::string(kForecastUrlPrefix) + "?station_id=" + station_id +
+                          "&api_key=" + api_token +
+                          "&units_temp=c&units_wind=mps&units_pressure=mb"
+                          "&units_precip=mm&units_distance=km";
+
+  int status_code = 0;
+  std::string response_body;
+  const bool request_ok = perform_json_request(url, &status_code, &response_body);
+
+  WeatherFlowSnapshot updated = snapshot();
+
+  if (!request_ok) {
+    ESP_LOGW(kTag, "Forecast fetch failed for station %s", station_id.c_str());
+    return false;
+  }
+  if (status_code < 200 || status_code >= 300) {
+    ESP_LOGW(kTag, "Forecast fetch rejected for station %s: status=%d", station_id.c_str(),
+             status_code);
+    return false;
+  }
+
+  parse_forecast_response(response_body, &updated);
+  if (!updated.has_forecast) {
+    ESP_LOGW(kTag, "Station %s: forecast response parsed but no hourly entries found",
+             station_id.c_str());
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    snapshot_ = updated;
+  }
+  return updated.has_forecast;
+}
+
 void WeatherFlowClient::parse_observation_response(const std::string& body,
                                                     WeatherFlowSnapshot* out) {
   cJSON* root = cJSON_Parse(body.c_str());
@@ -211,6 +284,48 @@ void WeatherFlowClient::parse_observation_response(const std::string& body,
   out->has_uv = read_number(obs, "uv", &out->uv_index);
   out->has_precip = read_number(obs, "precip_accum_local_day", &out->precip_accumulated_mm);
   out->has_battery = read_number(obs, "battery", &out->battery_volts);
+
+  cJSON_Delete(root);
+}
+
+void WeatherFlowClient::parse_forecast_response(const std::string& body,
+                                                WeatherFlowSnapshot* out) {
+  cJSON* root = cJSON_Parse(body.c_str());
+  if (root == nullptr) {
+    ESP_LOGW(kTag, "Forecast response was not valid JSON");
+    return;
+  }
+
+  const cJSON* forecast_obj = cJSON_GetObjectItemCaseSensitive(root, "forecast");
+  const cJSON* hourly_array =
+      forecast_obj != nullptr ? cJSON_GetObjectItemCaseSensitive(forecast_obj, "hourly") : nullptr;
+  if (!cJSON_IsArray(hourly_array)) {
+    ESP_LOGW(kTag, "Forecast response had no forecast.hourly array");
+    cJSON_Delete(root);
+    return;
+  }
+
+  const int count = std::min(cJSON_GetArraySize(hourly_array),
+                             static_cast<int>(kHourlyForecastCount));
+  bool any_entry = false;
+  for (int i = 0; i < count; ++i) {
+    const cJSON* entry = cJSON_GetArrayItem(hourly_array, i);
+    HourlyForecastEntry parsed;
+    double time_raw = 0.0;
+    const bool has_time = read_number(entry, "time", &time_raw);
+    if (has_time) {
+      parsed.time_unix = static_cast<uint64_t>(time_raw);
+    }
+    const bool has_temp = read_number(entry, "air_temperature", &parsed.air_temperature_c);
+    read_string(entry, "conditions", &parsed.conditions);
+    read_number(entry, "precip_probability", &parsed.precip_probability);
+    parsed.has_data = has_time && has_temp;
+    if (parsed.has_data) {
+      any_entry = true;
+    }
+    out->hourly_forecast[i] = parsed;
+  }
+  out->has_forecast = any_entry;
 
   cJSON_Delete(root);
 }
