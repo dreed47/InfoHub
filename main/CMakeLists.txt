@@ -32,11 +32,23 @@ if(CONFIG_INFOHUB_PLUGIN_WEATHER)
     )
 endif()
 
+set(INFOHUB_PLUGIN_EMBED_TXTFILES)
 if(CONFIG_INFOHUB_PLUGIN_STOCKS)
     list(APPEND INFOHUB_PLUGIN_SRCS
         "src/plugins/stocks/stock_client.cpp"
         "src/plugins/stocks/stocks_plugin.cpp"
         "src/plugins/stocks/stocks_plugin_portal.cpp"
+    )
+    list(APPEND INFOHUB_PLUGIN_EMBED_TXTFILES
+        # Alpha Vantage's cert chain (alphavantage.co -> Google Trust
+        # Services WE1 -> GTS Root R4) isn't covered by this project's
+        # pruned "common" mbedTLS cert bundle (CONFIG_MBEDTLS_CERTIFICATE_
+        # BUNDLE_DEFAULT_CMN in sdkconfig.defaults, not _FULL) -- pin the
+        # root directly, same EMBED_TXTFILES + esp_http_client cert_pem
+        # pattern as the printer plugin's Bambu certs. Fetched directly
+        # from https://pki.goog/repo/certs/gtsr4.pem (self-signed root,
+        # valid to 2036), not fabricated.
+        "include/infohub/plugins/stocks/gts_root_r4.cert"
     )
 endif()
 
@@ -98,6 +110,7 @@ idf_component_register(
         "include/infohub/plugins/printer/bambu_h2c_251122.cert"
         "include/infohub/plugins/printer/bambu_x2c_260425.cert"
         "include/infohub/plugins/printer/error_lookup.tsv"
+        ${INFOHUB_PLUGIN_EMBED_TXTFILES}
     REQUIRES
         ${INFOHUB_MAIN_REQUIRES}
     PRIV_REQUIRES

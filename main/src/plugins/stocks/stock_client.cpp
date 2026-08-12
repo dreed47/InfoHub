@@ -4,11 +4,19 @@
 #include <cstdlib>
 
 #include "cJSON.h"
-#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "infohub/wifi_manager.hpp"
+
+// Alpha Vantage's cert chain (alphavantage.co -> Google Trust Services WE1 ->
+// GTS Root R4) isn't covered by this project's pruned "common" mbedTLS cert
+// bundle (esp_crt_bundle_attach fails with "No matching trusted root
+// certificate found" -- confirmed on-device). Pin the root directly instead,
+// same EMBED_TXTFILES pattern as the printer plugin's Bambu certs (see
+// printer_client.cpp) -- gts_root_r4.cert is embedded via main/CMakeLists.txt.
+extern const uint8_t gts_root_r4_cert_start[] asm("_binary_gts_root_r4_cert_start");
+extern const uint8_t gts_root_r4_cert_end[] asm("_binary_gts_root_r4_cert_end");
 
 namespace infohub {
 
@@ -234,7 +242,8 @@ bool StockClient::perform_json_request(const std::string& url, int* status_code,
   esp_http_client_config_t config = {};
   config.url = url.c_str();
   config.timeout_ms = 10000;
-  config.crt_bundle_attach = esp_crt_bundle_attach;
+  config.cert_pem = reinterpret_cast<const char*>(gts_root_r4_cert_start);
+  config.cert_len = static_cast<size_t>(gts_root_r4_cert_end - gts_root_r4_cert_start);
   config.method = HTTP_METHOD_GET;
   config.keep_alive_enable = false;
   config.buffer_size = 2048;
