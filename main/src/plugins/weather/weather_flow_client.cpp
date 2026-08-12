@@ -14,7 +14,14 @@ namespace infohub {
 
 namespace {
 constexpr char kTag[] = "infohub.weather";
-constexpr size_t kMaxJsonResponseBytes = 16U * 1024U;
+constexpr size_t kMaxObservationJsonBytes = 16U * 1024U;
+// better_forecast returns many more fields/entries (forecast.hourly[] alone
+// is typically ~24-200+ hours, plus forecast.daily[] and a full current-
+// conditions block) than the single-observation endpoint -- 16KB isn't
+// enough (confirmed on-device: "JSON response exceeded cap while reading").
+// Generous headroom since this is a once-an-hour fetch on a board with
+// several MB of free PSRAM.
+constexpr size_t kMaxForecastJsonBytes = 96U * 1024U;
 constexpr char kUrlPrefix[] = "https://swd.weatherflow.com/swd/rest/observations/station/";
 constexpr char kForecastUrlPrefix[] = "https://swd.weatherflow.com/swd/rest/better_forecast";
 // Forecast doesn't need observation's 5-minute freshness -- refetch hourly,
@@ -164,7 +171,8 @@ bool WeatherFlowClient::fetch_once() {
 
   int status_code = 0;
   std::string response_body;
-  const bool request_ok = perform_json_request(url, &status_code, &response_body);
+  const bool request_ok =
+      perform_json_request(url, &status_code, &response_body, kMaxObservationJsonBytes);
 
   WeatherFlowSnapshot updated = snapshot();
   updated.configured = true;
@@ -218,7 +226,8 @@ bool WeatherFlowClient::fetch_forecast_once() {
 
   int status_code = 0;
   std::string response_body;
-  const bool request_ok = perform_json_request(url, &status_code, &response_body);
+  const bool request_ok =
+      perform_json_request(url, &status_code, &response_body, kMaxForecastJsonBytes);
 
   WeatherFlowSnapshot updated = snapshot();
 
@@ -331,7 +340,8 @@ void WeatherFlowClient::parse_forecast_response(const std::string& body,
 }
 
 bool WeatherFlowClient::perform_json_request(const std::string& url, int* status_code,
-                                             std::string* response_body) {
+                                             std::string* response_body,
+                                             size_t max_response_bytes) {
   if (status_code == nullptr || response_body == nullptr) {
     return false;
   }
@@ -378,7 +388,7 @@ bool WeatherFlowClient::perform_json_request(const std::string& url, int* status
 
   *status_code = esp_http_client_get_status_code(client);
   const int64_t content_length = esp_http_client_get_content_length(client);
-  if (content_length > static_cast<int64_t>(kMaxJsonResponseBytes)) {
+  if (content_length > static_cast<int64_t>(max_response_bytes)) {
     ESP_LOGW(kTag, "JSON response too large: %lld bytes", content_length);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
@@ -397,7 +407,7 @@ bool WeatherFlowClient::perform_json_request(const std::string& url, int* status
     if (read == 0) {
       break;
     }
-    if (response_body->size() + static_cast<size_t>(read) > kMaxJsonResponseBytes) {
+    if (response_body->size() + static_cast<size_t>(read) > max_response_bytes) {
       ESP_LOGW(kTag, "JSON response exceeded cap while reading");
       esp_http_client_close(client);
       esp_http_client_cleanup(client);

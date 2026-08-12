@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -102,8 +103,8 @@ class WeatherFlowClient {
   void task_loop();
   bool fetch_once();
   bool fetch_forecast_once();
-  bool perform_json_request(const std::string& url, int* status_code,
-                            std::string* response_body);
+  bool perform_json_request(const std::string& url, int* status_code, std::string* response_body,
+                            size_t max_response_bytes);
   void parse_observation_response(const std::string& body, WeatherFlowSnapshot* out);
   void parse_forecast_response(const std::string& body, WeatherFlowSnapshot* out);
 
