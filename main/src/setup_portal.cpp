@@ -1307,6 +1307,13 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     add_badge(&html, "weather-badge", "Weather", "Setup", "idle");
   }
 #endif
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+  if (show_connection_steps) {
+    // Same static-placeholder-filled-client-side pattern as weather's badge
+    // above, same plugin-isolation rationale.
+    add_badge(&html, "stocks-badge", "Stocks", "Setup", "idle");
+  }
+#endif
   html += "</div>";
   html += "<div class=\"hint-box\"><strong>Note:</strong> ";
   html += show_connection_steps
@@ -2048,6 +2055,32 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   }
 #endif
 
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+  // --- Stocks plugin section ---
+  // Same fields-start-empty / badge-filled-client-side pattern as weather's
+  // section above, same rationale (SetupPortal has no direct reference to
+  // StocksPlugin's data).
+  if (wifi_configured) {
+    begin_collapsible_section(
+        "Stocks",
+        "Up to 4 ticker symbols via Alpha Vantage's cloud API. Free-tier accounts are capped at 25 requests/day (4 symbols = 4 requests per poll cycle), and quote data itself only refreshes once per trading day regardless of poll frequency.",
+        "Setup", "idle", false, "stocks-section-pill");
+    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"stocks_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
+    html += "<div class=\"grid-2\">";
+    html += "<div class=\"field\"><label for=\"stocks_symbol1\">Symbol 1</label><input id=\"stocks_symbol1\" value=\"\" autocomplete=\"off\" placeholder=\"AAPL\"></div>";
+    html += "<div class=\"field\"><label for=\"stocks_symbol2\">Symbol 2</label><input id=\"stocks_symbol2\" value=\"\" autocomplete=\"off\" placeholder=\"MSFT\"></div>";
+    html += "<div class=\"field\"><label for=\"stocks_symbol3\">Symbol 3</label><input id=\"stocks_symbol3\" value=\"\" autocomplete=\"off\" placeholder=\"GOOG\"></div>";
+    html += "<div class=\"field\"><label for=\"stocks_symbol4\">Symbol 4</label><input id=\"stocks_symbol4\" value=\"\" autocomplete=\"off\" placeholder=\"AMZN\"></div>";
+    html += "</div>";
+    html += "<div class=\"field\"><label for=\"stocks_api_token\">Alpha Vantage API Key</label><input id=\"stocks_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved key\" autocomplete=\"off\"></div>";
+    html += "<div class=\"field\"><label for=\"stocks_poll_s\">Poll Interval (seconds)</label><input id=\"stocks_poll_s\" type=\"number\" min=\"3600\" value=\"21600\"></div>";
+    html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"stocks-detail\">Not configured</span></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"stocks-save-button\">Save Stocks Settings</button>";
+    html += "<div class=\"micro\">Saves symbols, API key and poll interval, then fetches immediately.</div></div>";
+    end_collapsible_section();
+  }
+#endif
+
   if (wifi_configured) {
     render_wifi_section();
   }
@@ -2753,6 +2786,53 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "try{await fetch('/api/plugins/weather/enabled',{method:'POST',credentials:'same-origin',"
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:weatherEnabledInput.checked})});}"
           "catch(error){}finally{weatherEnabledInput.disabled=false;}});}";
+#endif
+
+#if CONFIG_INFOHUB_PLUGIN_STOCKS
+  // --- Stocks plugin JS ---
+  // Self-contained: fetches/saves through /api/plugins/stocks/config only,
+  // no coupling to any other plugin's JS -- same shape as weather's block
+  // above, generalized from one symbol field to an array of 4.
+  html += "let stocksLoaded=false;";
+  html += "async function loadStocksStatus(){"
+          "try{const response=await fetch('/api/plugins/stocks/config',{cache:'no-store'});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(!stocksLoaded){const symbols=body.symbols||[];"
+          "for(let i=0;i<4;i++){const inp=document.getElementById('stocks_symbol'+(i+1));"
+          "if(inp)inp.value=symbols[i]||'';}"
+          "const pollInput=document.getElementById('stocks_poll_s');"
+          "if(pollInput)pollInput.value=body.poll_s||21600;"
+          "const enabledInput=document.getElementById('stocks_enabled');"
+          "if(enabledInput)enabledInput.checked=body.enabled!==false;"
+          "stocksLoaded=true;}"
+          "setBadge('stocks-badge','Stocks',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
+          "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
+          "const detailEl=document.getElementById('stocks-detail');"
+          "if(detailEl){if(!body.configured){detailEl.textContent='Not configured';}"
+          "else{const quotes=(body.quotes||[]).filter(q=>q.has_data);"
+          "if(quotes.length){detailEl.textContent=quotes.map(q=>q.symbol+' '+q.price.toFixed(2)).join('  \\u00b7  ');}"
+          "else{detailEl.textContent=body.last_error||'Waiting for first fetch...';}}}}"
+          "catch(error){}}";
+  html += "const stocksSaveButton=document.getElementById('stocks-save-button');";
+  html += "if(stocksSaveButton){stocksSaveButton.addEventListener('click',async()=>{"
+          "stocksSaveButton.disabled=true;"
+          "try{const symbols=[];for(let i=0;i<4;i++){const inp=document.getElementById('stocks_symbol'+(i+1));"
+          "symbols.push(inp?inp.value.trim().toUpperCase():'');}"
+          "await fetch('/api/plugins/stocks/config',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
+          "symbols:symbols,"
+          "api_token:document.getElementById('stocks_api_token').value,"
+          "poll_s:document.getElementById('stocks_poll_s').value})});"
+          "document.getElementById('stocks_api_token').value='';"
+          "await loadStocksStatus();}"
+          "catch(error){}finally{stocksSaveButton.disabled=false;}});}";
+  html += "loadStocksStatus();setInterval(loadStocksStatus,5000);";
+  html += "const stocksEnabledInput=document.getElementById('stocks_enabled');";
+  html += "if(stocksEnabledInput){stocksEnabledInput.addEventListener('change',async()=>{"
+          "stocksEnabledInput.disabled=true;"
+          "try{await fetch('/api/plugins/stocks/enabled',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:stocksEnabledInput.checked})});}"
+          "catch(error){}finally{stocksEnabledInput.disabled=false;}});}";
 #endif
 
   // --- Printer enabled toggle JS ---
