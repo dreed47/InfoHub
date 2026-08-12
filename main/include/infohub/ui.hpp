@@ -136,7 +136,13 @@ class Ui {
   // page-enable toggle that skipped apply_page0_parallax()/
   // apply_page_visibility() left stale printer-overlay text visible on top
   // of the newly-active page).
-  void set_plugin_pages_enabled(const char* plugin_id, bool enabled);
+  // lock_timeout_ms defaults to 200 for live in-loop calls (e.g. a plugin's
+  // own update_ui() re-asserting its state every tick, where a lost race
+  // just gets retried next tick). A one-shot caller with no next tick to
+  // retry on (e.g. a portal enable/disable toggle handler, which stops this
+  // plugin's update_ui() calls the moment it disables) should pass a longer
+  // timeout — see set_printer_plugin_enabled()'s same parameter/rationale.
+  void set_plugin_pages_enabled(const char* plugin_id, bool enabled, uint32_t lock_timeout_ms = 200);
 
   // Page 0 (printer-selector) is a fixed pager slot (kPageIdxPrinterSelect,
   // always present — PrinterPlugin is not Kconfig-optional like weather is)

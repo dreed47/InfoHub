@@ -140,7 +140,11 @@ esp_err_t WeatherPlugin::handle_enabled_post(httpd_req_t* request) {
     // Application's update_ui() loop skips disabled plugins, so the pager
     // wouldn't otherwise notice the page should stop being offered — hide it
     // immediately rather than leaving it enabled at its last-known state.
-    plugin->ui_->set_plugin_pages_enabled(plugin->id(), false);
+    // This runs on SetupPortal's HTTP task, racing the main task for the
+    // LVGL lock, with no next update_ui() tick to retry a lost race on (see
+    // set_plugin_pages_enabled()'s lock_timeout_ms doc) — same fix as
+    // PrinterPlugin's equivalent portal handler.
+    plugin->ui_->set_plugin_pages_enabled(plugin->id(), false, /*lock_timeout_ms=*/2000);
   }
 
   send_json(request, "{\"status\":\"saved\"}");

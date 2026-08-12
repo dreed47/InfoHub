@@ -3032,8 +3032,8 @@ lv_obj_t* Ui::plugin_page_container(int page_index) const {
   return plugin_pages_[local_offset];
 }
 
-void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled) {
-  LvglLockGuard lock(200, "set_plugin_pages_enabled");
+void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled, uint32_t lock_timeout_ms) {
+  LvglLockGuard lock(lock_timeout_ms, "set_plugin_pages_enabled");
   if (!lock.locked()) {
     return;
   }

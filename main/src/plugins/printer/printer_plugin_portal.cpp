@@ -949,7 +949,13 @@ esp_err_t PrinterPlugin::handle_enabled_post(httpd_req_t* request) {
 
   plugin->config_store_->save_plugin_string(plugin->id(), "enabled", enabled ? "1" : "0");
   plugin->set_enabled(enabled);
-  plugin->ui_->set_printer_plugin_enabled(enabled);
+  // This runs on SetupPortal's HTTP task, racing the main task for the LVGL
+  // lock. Once disabled, Application stops calling this plugin's update_ui()
+  // (see Application::run()'s enabled() guard), so there's no next tick to
+  // retry a lost race on — unlike the boot-time call in init() (same
+  // lock_timeout_ms=2000, see the comment there), a timeout here would
+  // silently leave printer content pages visible/stale forever.
+  plugin->ui_->set_printer_plugin_enabled(enabled, /*lock_timeout_ms=*/2000);
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;
