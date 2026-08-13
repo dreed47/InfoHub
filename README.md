@@ -6,7 +6,7 @@ It works directly with Bambu Cloud, the printer's local connection, or both. Hom
 
 (screenshots coming soon)
 
-Latest stable version: **v1.6.2**
+Current version: **Alpha v0.1.0**
 
 ## Supported hardware
 
@@ -83,7 +83,7 @@ You can also open Web Config directly and use its **Firmware Update** section. I
 
 The public installer performs the initial USB flash. OTA itself runs through Web Config so the firmware can safely update the inactive application slot and retain the configuration.
 
-> Devices running v1.5.x or older need one initial USB flash before using v1.6.x OTA images because v1.6 introduced a new partition layout.
+> InfoHub is in early alpha (v0.1.0). Expect rough edges and breaking changes between versions.
 
 ## Main features
 

@@ -450,11 +450,11 @@
             <div class="release-info" aria-live="polite">
               <div class="fact">
                 <span>Channel</span>
-                <strong id="firmware-channel">Stable</strong>
+                <strong id="firmware-channel">Alpha</strong>
               </div>
               <div class="fact">
                 <span>Version</span>
-                <strong id="firmware-version">v1.6.2</strong>
+                <strong id="firmware-version">v0.1.0</strong>
               </div>
               <div class="fact">
                 <span>Flash offset</span>
@@ -486,7 +486,7 @@
               alt="InfoHub circular display device"
             >
             <div class="caption">
-              <strong id="caption-version">Stable v1.6.2</strong>
+              <strong id="caption-version">Alpha v0.1.0</strong>
               <span id="caption-path">release/initial/infohub_full.bin</span>
             </div>
           </aside>
@@ -527,22 +527,22 @@
     <script>
       const firmwares = [
         {
-          label: "Stable v1.6.2 (1.75 AMOLED)",
-          channel: "Stable",
-          version: "v1.6.2",
+          label: "Alpha v0.1.0 (1.75 AMOLED)",
+          channel: "Alpha",
+          version: "v0.1.0",
           path: "../release/initial/infohub_full.bin",
           displayPath: "release/initial/infohub_full.bin",
           otaUrl: "https://github.com/dreed47/InfoHub/blob/main/release/ota/infohub_ota.bin",
-          note: "Factory flash erases device data before installing v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.",
+          note: "Early alpha build -- expect rough edges. Factory flash erases device data before installing v0.1.0. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.",
         },
         {
-          label: 'Stable v1.6.2 (2.8" LCD)',
-          channel: "Stable",
-          version: "v1.6.2-2.8C",
+          label: 'Alpha v0.1.0 (2.8" LCD)',
+          channel: "Alpha",
+          version: "v0.1.0-2.8C",
           path: "../release/2.8c/initial/infohub_full.bin",
           displayPath: "release/2.8c/initial/infohub_full.bin",
           otaUrl: "https://github.com/dreed47/InfoHub/blob/main/release/2.8c/ota/infohub_ota.bin",
-          note: 'Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v1.6.2. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
+          note: 'Early alpha build -- expect rough edges. Factory flash image for the ESP32-S3-Touch-LCD-2.8C hardware variant on v0.1.0. Keep the USB cable connected after the flash: the Wi-Fi picker appears automatically, so the setup hotspot is only needed as a fallback.',
         },
       ];
 
@@ -614,8 +614,8 @@
       }
 
       appendOptionGroup(
-        "Stable release",
-        firmwares.filter((firmware) => firmware.channel === "Stable"),
+        "Alpha release",
+        firmwares.filter((firmware) => firmware.channel === "Alpha"),
       );
       appendOptionGroup(
         "Newer beta builds",

@@ -82,7 +82,7 @@ idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p COM7 monitor
 Build both variants first. Then run:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v1.6.2
+powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v0.1.0-alpha
 ```
 
 The script creates the four current release images plus versioned archive copies:
@@ -99,13 +99,13 @@ Versioned copies are stored below the corresponding `archive/` directories.
 AMOLED 1.75:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-amoled_1_75 --release-root release --version v1.6.2
+python tools/package_initial_flash.py --build-dir build-amoled_1_75 --release-root release --version v0.1.0-alpha
 ```
 
 LCD 2.8C:
 
 ```powershell
-python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version v1.6.2-2.8c
+python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root release/2.8c --version v0.1.0-alpha-2.8c
 ```
 
 ## Initial image versus OTA image
@@ -114,8 +114,6 @@ python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root 
 - `infohub_ota.bin` contains only the application. Install it through the running device's Web Config so ESP-IDF writes it to the inactive OTA slot and preserves NVS configuration.
 
 Do not use an OTA image as a full image at address `0x0`.
-
-Devices on v1.5.x or older require one full v1.6.x flash because v1.6 changed the partition layout. Devices already using the v1.6 layout can normally use OTA.
 
 ## Manual full-image flashing
 
