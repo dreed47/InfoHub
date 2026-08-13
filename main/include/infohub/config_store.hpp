@@ -160,19 +160,17 @@ class ConfigStore {
   esp_err_t save_arc_color_scheme(const ArcColorScheme& colors) const;
   esp_err_t save_battery_display_policy(const BatteryDisplayPolicy& policy) const;
 
-  // Per-event sound settings (event_index matches AudioNotifier::Event order).
-  // Default enable: first 5 events on (Print Started/Finished/Error/HMS/Paused);
-  // Filament Change (5), Reconnect (6), Click (7) default off.
-  bool load_audio_event_enabled(uint8_t event_index) const;
-  esp_err_t save_audio_event_enabled(uint8_t event_index, bool enabled) const;
-  // Raw PCM bytes (16 kHz 16-bit mono int16_t samples). Stored on SPIFFS.
+  // Raw PCM bytes for a custom per-event sound (16 kHz 16-bit mono int16_t
+  // samples), stored on LittleFS, ordinal-indexed by AudioNotifier::Event.
+  // The enabled-flag/display-name settings for these events are NOT here —
+  // they're owned by whichever plugin actually drives the events (today,
+  // exclusively PrinterPlugin — see its audio_event_enabled()/
+  // audio_event_display_name(), stored via the generic per-plugin accessors
+  // below) rather than a core ordinal NVS scheme.
   bool has_audio_event_pcm(uint8_t event_index) const;
   std::vector<uint8_t> load_audio_event_pcm(uint8_t event_index) const;
   esp_err_t save_audio_event_pcm(uint8_t event_index, const uint8_t* data, size_t len) const;
   esp_err_t clear_audio_event_pcm(uint8_t event_index) const;
-  // Short display name for the uploaded WAV (max 7 chars, no extension).
-  std::string load_audio_event_filename(uint8_t event_index) const;
-  esp_err_t save_audio_event_filename(uint8_t event_index, const std::string& name) const;
 
   // --- Generic per-plugin settings storage -----------------------------
   // Scoped accessors for plugin-owned settings, so adding a plugin doesn't

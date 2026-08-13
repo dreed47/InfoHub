@@ -620,37 +620,16 @@ PrinterProfile ConfigStore::load_active_printer_profile() const {
 // ---------------------------------------------------------------------------
 
 namespace {
-void event_enable_key(uint8_t idx, char* buf, size_t buf_size) {
-  std::snprintf(buf, buf_size, "snd_en_%u", static_cast<unsigned>(idx));
-}
-// SPIFFS path for raw PCM data (base path mounted at "/sounds").
+// SPIFFS path for raw PCM data (base path mounted at "/sounds"). Ordinal-
+// indexed by AudioNotifier::Event, unlike the enabled-flag/display-name
+// settings below — PrinterPlugin (the sole owner of these 8 built-in
+// events) reads/writes PCM blobs straight through ConfigStore, since a
+// LittleFS blob path isn't NVS-key-length-constrained the way the per-plugin
+// enabled/filename settings are (see PrinterPlugin::audio_event_enabled()).
 void event_pcm_path(uint8_t idx, char* buf, size_t buf_size) {
   std::snprintf(buf, buf_size, "/sounds/snd_%u.pcm", static_cast<unsigned>(idx));
 }
-void event_filename_key(uint8_t idx, char* buf, size_t buf_size) {
-  std::snprintf(buf, buf_size, "snd_fn_%u", static_cast<unsigned>(idx));
-}
-// Core print/HMS events and Click default on; less common optional events off.
-bool default_event_enabled(uint8_t idx) { return idx < 5U || idx == 7U; }
 }  // namespace
-
-bool ConfigStore::load_audio_event_enabled(uint8_t event_index) const {
-  if (event_index >= 8) return true;
-  char key[16] = {};
-  event_enable_key(event_index, key, sizeof(key));
-  const std::string s = load_string(key);
-  if (s.empty()) {
-    return default_event_enabled(event_index);
-  }
-  return parse_bool_or_default(s, default_event_enabled(event_index));
-}
-
-esp_err_t ConfigStore::save_audio_event_enabled(uint8_t event_index, bool enabled) const {
-  if (event_index >= 8) return ESP_ERR_INVALID_ARG;
-  char key[16] = {};
-  event_enable_key(event_index, key, sizeof(key));
-  return save_string(key, enabled ? "1" : "0");
-}
 
 bool ConfigStore::has_audio_event_pcm(uint8_t event_index) const {
   if (event_index >= 8) return false;
@@ -706,21 +685,6 @@ esp_err_t ConfigStore::clear_audio_event_pcm(uint8_t event_index) const {
   event_pcm_path(event_index, path, sizeof(path));
   const int ret = remove(path);
   return (ret == 0 || errno == ENOENT) ? ESP_OK : ESP_FAIL;
-}
-
-std::string ConfigStore::load_audio_event_filename(uint8_t event_index) const {
-  if (event_index >= 8) return {};
-  char key[16] = {};
-  event_filename_key(event_index, key, sizeof(key));
-  return load_string(key);  // empty string when not stored
-}
-
-esp_err_t ConfigStore::save_audio_event_filename(uint8_t event_index,
-                                                  const std::string& name) const {
-  if (event_index >= 8) return ESP_ERR_INVALID_ARG;
-  char key[16] = {};
-  event_filename_key(event_index, key, sizeof(key));
-  return save_string(key, name);
 }
 
 // ---------------------------------------------------------------------------

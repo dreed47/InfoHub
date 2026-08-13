@@ -697,9 +697,6 @@ esp_err_t SetupPortal::start(const std::array<Plugin*, kMaxPlugins>& plugins) {
       {"/api/portal-access", HTTP_POST, &SetupPortal::handle_portal_access_post},
       {"/api/timezone", HTTP_POST, &SetupPortal::handle_timezone_post},
       {"/api/audio", HTTP_POST, &SetupPortal::handle_audio_post},
-      {"/api/audio/event", HTTP_POST, &SetupPortal::handle_audio_event_post},
-      {"/api/audio/upload", HTTP_POST, &SetupPortal::handle_audio_upload},
-      {"/api/audio/clear", HTTP_POST, &SetupPortal::handle_audio_clear},
       {"/api/session/extend", HTTP_POST, &SetupPortal::handle_session_extend},
       {"/api/ota/upload", HTTP_POST, &SetupPortal::handle_ota_upload},
       {"/api/ota/url", HTTP_POST, &SetupPortal::handle_ota_url},
@@ -1642,10 +1639,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
               "<th style=\"padding:4px 6px;\"></th>"
               "</tr></thead><tbody>";
       for (int i = 0; i < 8; ++i) {
-        const bool ev_en = portal->config_store_.load_audio_event_enabled(static_cast<uint8_t>(i));
+        const bool ev_en = portal->printer_plugin()->audio_event_enabled(static_cast<uint8_t>(i));
         const bool has_pcm = portal->config_store_.has_audio_event_pcm(static_cast<uint8_t>(i));
         const std::string stored_name = has_pcm
-            ? portal->config_store_.load_audio_event_filename(static_cast<uint8_t>(i))
+            ? portal->printer_plugin()->audio_event_display_name(static_cast<uint8_t>(i))
             : std::string{};
         html += "<tr data-event=\"";
         html += std::to_string(i);
@@ -2466,10 +2463,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   // Per-event audio customization JS
   html += "{const kEvCnt=8;"
           "async function setEvEnabled(idx,en){"
-              "const r=await fetch('/api/audio/event',{method:'POST',headers:{'Content-Type':'application/json'},"
+              "const r=await fetch('/api/plugins/printer/audio/event',{method:'POST',headers:{'Content-Type':'application/json'},"
               "body:JSON.stringify({event:idx,enabled:en})});return r.ok;}"
           "async function clearEvSound(idx){"
-              "const r=await fetch('/api/audio/clear',{method:'POST',headers:{'Content-Type':'application/json'},"
+              "const r=await fetch('/api/plugins/printer/audio/clear',{method:'POST',headers:{'Content-Type':'application/json'},"
               "body:JSON.stringify({event:idx})});return r.ok;}"
           "async function testEv(idx){"
               "const vol=document.getElementById('audio_volume');"
@@ -2491,7 +2488,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
                   "const buf=await f.arrayBuffer();"
                   "const fn=f.name.replace(/\\.[^.]+$/,'');"
                   "const shortName=fn.length>7?fn.slice(0,7)+'\u2026':fn;"
-                  "const r=await fetch('/api/audio/upload?event='+idx+'&name='+encodeURIComponent(shortName),{method:'POST',"
+                  "const r=await fetch('/api/plugins/printer/audio/upload?event='+idx+'&name='+encodeURIComponent(shortName),{method:'POST',"
                       "headers:{'Content-Type':'audio/wav'},body:buf}).catch(()=>({ok:false,json:()=>({})}));"
                   "const body=await r.json().catch(()=>({}));"
                   "if(r.ok){"
@@ -3511,262 +3508,6 @@ esp_err_t SetupPortal::handle_audio_post(httpd_req_t* request) {
   }
 
   send_json(request, "{\"status\":\"saved\"}");
-  return ESP_OK;
-}
-
-// ---------------------------------------------------------------------------
-// Audio event enable/disable  POST /api/audio/event
-// ---------------------------------------------------------------------------
-
-esp_err_t SetupPortal::handle_audio_event_post(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const cJSON* event_item = cJSON_GetObjectItemCaseSensitive(root, "event");
-  const cJSON* enabled_item = cJSON_GetObjectItemCaseSensitive(root, "enabled");
-  if (!cJSON_IsNumber(event_item) || !cJSON_IsBool(enabled_item)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "event and enabled required");
-  }
-
-  const int event_idx = static_cast<int>(event_item->valuedouble);
-  const bool enabled = cJSON_IsTrue(enabled_item);
-  cJSON_Delete(root);
-
-  if (event_idx < 0 || event_idx >= static_cast<int>(AudioNotifier::kEventCount)) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "event out of range");
-  }
-
-  ESP_LOGI(kTag, "Audio event %d enabled=%d", event_idx, enabled ? 1 : 0);
-  ESP_RETURN_ON_ERROR(
-      portal->config_store_.save_audio_event_enabled(static_cast<uint8_t>(event_idx), enabled),
-      kTag, "save event enabled failed");
-  portal->audio_notifier_.set_event_enabled(
-      static_cast<AudioNotifier::Event>(event_idx), enabled);
-
-  send_json(request, "{\"status\":\"saved\"}");
-  return ESP_OK;
-}
-
-// ---------------------------------------------------------------------------
-// WAV upload for a specific event  POST /api/audio/upload?event=N
-// WAV must be 16 kHz, 16-bit, mono PCM. Max body 32 KB + header.
-// ---------------------------------------------------------------------------
-
-namespace {
-
-// Extract the query-string value of parameter `param` from the request URI.
-// Returns -1 if not found or not a valid integer.
-int uri_query_int(httpd_req_t* req, const char* param) {
-  char buf[64] = {};
-  if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) return -1;
-  char val[16] = {};
-  if (httpd_query_key_value(buf, param, val, sizeof(val)) != ESP_OK) return -1;
-  char* end = nullptr;
-  const long v = std::strtol(val, &end, 10);
-  if (end == val || *end != '\0') return -1;
-  return static_cast<int>(v);
-}
-
-// Extract a string query parameter from a request URI. Returns empty string if absent.
-std::string uri_query_str(httpd_req_t* req, const char* param) {
-  char buf[128] = {};
-  if (httpd_req_get_url_query_str(req, buf, sizeof(buf)) != ESP_OK) return {};
-  char val[64] = {};
-  if (httpd_query_key_value(buf, param, val, sizeof(val)) != ESP_OK) return {};
-  return std::string(val);
-}
-
-constexpr size_t kMaxWavBody = 320000 + 100;  // 10 s @ 16 kHz 16-bit + generous header
-constexpr size_t kMinUploadPcmSamples = 16000 / 50;  // 20 ms
-constexpr int kMinUploadPcmPeak = 96;
-
-// Receive a raw binary body up to max_bytes into `out`. Returns ESP_OK or
-// sends an HTTP error response and returns the error code.
-esp_err_t receive_binary_body(httpd_req_t* request, std::vector<uint8_t>& out,
-                               size_t max_bytes) {
-  if (request->content_len <= 0 ||
-      request->content_len > static_cast<int>(max_bytes)) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "invalid body length");
-  }
-  out.resize(static_cast<size_t>(request->content_len));
-  int received = 0;
-  while (received < request->content_len) {
-    const int ret = httpd_req_recv(request, reinterpret_cast<char*>(out.data()) + received,
-                                   request->content_len - received);
-    if (ret <= 0) {
-      return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "body read failed");
-    }
-    received += ret;
-  }
-  return ESP_OK;
-}
-
-bool pcm_upload_is_playable(const std::vector<int16_t>& samples) {
-  if (samples.size() < kMinUploadPcmSamples) {
-    return false;
-  }
-  int peak = 0;
-  for (const int16_t sample : samples) {
-    const int value = sample < 0 ? -static_cast<int>(sample) : static_cast<int>(sample);
-    if (value > peak) {
-      peak = value;
-    }
-  }
-  return peak >= kMinUploadPcmPeak;
-}
-
-// Minimal RIFF/WAV parser. Accepts only mono 16-bit 16 kHz PCM WAV.
-// Extracts the raw int16_t samples into `samples_out`.
-bool parse_wav_pcm(const uint8_t* data, size_t len, std::vector<int16_t>& samples_out,
-                   std::string& error_out) {
-  if (len < 44) { error_out = "file too small"; return false; }
-  if (std::memcmp(data, "RIFF", 4) != 0 || std::memcmp(data + 8, "WAVE", 4) != 0) {
-    error_out = "not a WAV file";
-    return false;
-  }
-
-  uint16_t audio_format = 0, channels = 0, bits_per_sample = 0;
-  uint32_t sample_rate = 0;
-  const uint8_t* pcm_data = nullptr;
-  size_t pcm_bytes = 0;
-
-  size_t pos = 12;
-  while (pos + 8 <= len) {
-    uint32_t chunk_size = 0;
-    std::memcpy(&chunk_size, data + pos + 4, 4);
-    if (std::memcmp(data + pos, "fmt ", 4) == 0 && chunk_size >= 16) {
-      std::memcpy(&audio_format, data + pos + 8, 2);
-      std::memcpy(&channels, data + pos + 10, 2);
-      std::memcpy(&sample_rate, data + pos + 12, 4);
-      std::memcpy(&bits_per_sample, data + pos + 22, 2);
-    } else if (std::memcmp(data + pos, "data", 4) == 0) {
-      if (pos + 8 <= len) {
-        pcm_data = data + pos + 8;
-        pcm_bytes = std::min(static_cast<size_t>(chunk_size), len - pos - 8);
-      }
-    }
-    pos += 8 + chunk_size;
-    if (chunk_size & 1U) pos++;  // RIFF pads odd-length chunks to 2-byte boundary
-    if (pos == 0) break;  // guard against chunk_size wrap
-  }
-
-  if (pcm_data == nullptr) { error_out = "data chunk not found"; return false; }
-  if (audio_format != 1)   { error_out = "only PCM WAV supported (format=1)"; return false; }
-  if (channels != 1)       { error_out = "only mono WAV supported (channels=1)"; return false; }
-  if (sample_rate != 16000) { error_out = "only 16000 Hz WAV supported"; return false; }
-  if (bits_per_sample != 16) { error_out = "only 16-bit WAV supported"; return false; }
-
-  const size_t sample_count = pcm_bytes / sizeof(int16_t);
-  if (sample_count == 0) { error_out = "empty audio data"; return false; }
-
-  samples_out.resize(sample_count);
-  std::memcpy(samples_out.data(), pcm_data, sample_count * sizeof(int16_t));
-  if (!pcm_upload_is_playable(samples_out)) {
-    samples_out.clear();
-    error_out = "audio too short or silent";
-    return false;
-  }
-  return true;
-}
-
-}  // namespace
-
-esp_err_t SetupPortal::handle_audio_upload(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  const int event_idx = uri_query_int(request, "event");
-  if (event_idx < 0 || event_idx >= static_cast<int>(AudioNotifier::kEventCount)) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "missing or invalid event param");
-  }
-
-  // Optional display name from the "name" query param (already trimmed to 7 chars by the client).
-  std::string display_name = uri_query_str(request, "name");
-  if (display_name.size() > 8) display_name.resize(8);  // hard cap server-side
-
-  std::vector<uint8_t> body;
-  esp_err_t recv_err = receive_binary_body(request, body, kMaxWavBody);
-  if (recv_err != ESP_OK) return recv_err;
-
-  std::vector<int16_t> samples;
-  std::string parse_error;
-  if (!parse_wav_pcm(body.data(), body.size(), samples, parse_error)) {
-    ESP_LOGW(kTag, "WAV parse failed for event %d: %s", event_idx, parse_error.c_str());
-    std::string err_json = "{\"error\":\"Invalid WAV: ";
-    err_json += parse_error;
-    err_json += "\",\"detail\":\"Upload a mono 16-bit 16000 Hz PCM WAV file.\"}";
-    httpd_resp_set_type(request, "application/json");
-    httpd_resp_set_status(request, "400 Bad Request");
-    httpd_resp_sendstr(request, err_json.c_str());
-    return ESP_OK;
-  }
-
-  const size_t pcm_bytes = samples.size() * sizeof(int16_t);
-  ESP_LOGI(kTag, "WAV upload event %d: %zu samples (%.2f s)",
-           event_idx, samples.size(),
-           static_cast<float>(samples.size()) / 16000.0f);
-
-  const esp_err_t save_err = portal->config_store_.save_audio_event_pcm(
-      static_cast<uint8_t>(event_idx),
-      reinterpret_cast<const uint8_t*>(samples.data()), pcm_bytes);
-  if (save_err != ESP_OK) {
-    ESP_LOGE(kTag, "save_audio_event_pcm failed: %s", esp_err_to_name(save_err));
-    return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
-                               "NVS write failed");
-  }
-
-  portal->audio_notifier_.set_event_pcm(
-      static_cast<AudioNotifier::Event>(event_idx), std::move(samples));
-
-  // Persist the display name so it survives reboots.
-  if (!display_name.empty()) {
-    portal->config_store_.save_audio_event_filename(
-        static_cast<uint8_t>(event_idx), display_name);
-  }
-
-  send_json(request, "{\"status\":\"saved\"}");
-  return ESP_OK;
-}
-
-// ---------------------------------------------------------------------------
-// Clear custom sound  POST /api/audio/clear  {"event": N}
-// ---------------------------------------------------------------------------
-
-esp_err_t SetupPortal::handle_audio_clear(httpd_req_t* request) {
-  auto* portal = static_cast<SetupPortal*>(request->user_ctx);
-  if (portal == nullptr) return ESP_FAIL;
-  if (!portal->is_request_authorized(request)) return portal->send_locked_response(request);
-
-  cJSON* root = nullptr;
-  esp_err_t parse_err = receive_json_body(request, &root);
-  if (parse_err != ESP_OK) return parse_err;
-
-  const cJSON* event_item = cJSON_GetObjectItemCaseSensitive(root, "event");
-  if (!cJSON_IsNumber(event_item)) {
-    cJSON_Delete(root);
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "event required");
-  }
-
-  const int event_idx = static_cast<int>(event_item->valuedouble);
-  cJSON_Delete(root);
-
-  if (event_idx < 0 || event_idx >= static_cast<int>(AudioNotifier::kEventCount)) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "event out of range");
-  }
-
-  ESP_LOGI(kTag, "Clearing custom sound for event %d", event_idx);
-  portal->config_store_.clear_audio_event_pcm(static_cast<uint8_t>(event_idx));
-  portal->config_store_.save_audio_event_filename(static_cast<uint8_t>(event_idx), "");
-  portal->audio_notifier_.clear_event_pcm(static_cast<AudioNotifier::Event>(event_idx));
-
-  send_json(request, "{\"status\":\"cleared\"}");
   return ESP_OK;
 }
 

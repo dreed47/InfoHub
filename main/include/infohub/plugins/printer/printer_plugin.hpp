@@ -98,6 +98,15 @@ class PrinterPlugin : public Plugin {
   // Wi-Fi-level check itself — that's genuinely core).
   bool is_configured() const override;
 
+  // Portal-facing accessors for this plugin's own built-in AudioNotifier
+  // events (see printer_plugin.cpp's kAudioEventCount block). Enable flag +
+  // display name are stored under this plugin's own ConfigStore namespace;
+  // PCM presence/bytes stay on ConfigStore directly (still ordinal-indexed,
+  // unchanged by this move) — read via config_store()->has_audio_event_pcm()
+  // etc. from the caller.
+  bool audio_event_enabled(uint8_t event_idx) const;
+  std::string audio_event_display_name(uint8_t event_idx) const;
+
  private:
   // Phase 8d: portal routes moved here from SetupPortal (printer_plugin_portal.cpp).
   // Same handler shape as SetupPortal's — static + httpd_req_t::user_ctx — just
@@ -122,6 +131,13 @@ class PrinterPlugin : public Plugin {
   // all trigger a reboot on change) — this one applies live, same shape as
   // WeatherPlugin's enabled toggle.
   static esp_err_t handle_enabled_post(httpd_req_t* request);
+  // Per-event enable/upload/clear for this plugin's 8 built-in AudioNotifier
+  // events — moved here from SetupPortal (see audio_event_enabled() above).
+  static esp_err_t handle_audio_event_post(httpd_req_t* request);
+  static esp_err_t handle_audio_upload(httpd_req_t* request);
+  static esp_err_t handle_audio_clear(httpd_req_t* request);
+  esp_err_t save_audio_event_enabled(uint8_t event_idx, bool enabled) const;
+  esp_err_t save_audio_event_display_name(uint8_t event_idx, const std::string& name) const;
 
   // Phase 6a: page0 (printer-selector) card management, moved here from Ui
   // (see CLAUDE.md's "Ui changes sketch" / the Phase 6a plan). Ui only owns

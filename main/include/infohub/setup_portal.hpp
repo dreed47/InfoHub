@@ -63,9 +63,6 @@ class SetupPortal {
   static esp_err_t handle_battery_display_post(httpd_req_t* request);
   static esp_err_t handle_portal_access_post(httpd_req_t* request);
   static esp_err_t handle_audio_post(httpd_req_t* request);
-  static esp_err_t handle_audio_event_post(httpd_req_t* request);
-  static esp_err_t handle_audio_upload(httpd_req_t* request);
-  static esp_err_t handle_audio_clear(httpd_req_t* request);
   static esp_err_t handle_timezone_post(httpd_req_t* request);
   static esp_err_t handle_session_extend(httpd_req_t* request);
   static esp_err_t handle_ota_upload(httpd_req_t* request);

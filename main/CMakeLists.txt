@@ -37,11 +37,12 @@ if(CONFIG_INFOHUB_PLUGIN_PRINTER)
         "src/plugins/printer/printer_client.cpp"
         "src/plugins/printer/printer_state.cpp"
         "src/plugins/printer/status_resolver.cpp"
-        # bambuicon (logo) / dosis_32 / mdi_40 are printer-content-only as of
-        # Phase 4b/4c — moved out of the unconditional font/image asset list
-        # below, into here.
+        # bambuicon (logo) / mdi_40 are printer-content-only as of Phase
+        # 4b/4c — moved out of the unconditional font/image asset list below,
+        # into here. dosis_32 stays unconditional below: weather and stocks
+        # both use it too (confirmed via grep), a printer-disabled build
+        # fails to link without it.
         "include/img/bambuicon.c"
-        "include/font/dosis_32.c"
         "include/font/mdi_40.c"
     )
     list(APPEND INFOHUB_PLUGIN_EMBED_TXTFILES
@@ -115,6 +116,7 @@ idf_component_register(
         "src/network_arbiter.cpp"
         "src/plugin_registry.cpp"
         "include/font/dosis_20.c"
+        "include/font/dosis_32.c"
         "include/font/dosis_40.c"
         "include/font/mdi_30.c"
         "src/pmu.cpp"

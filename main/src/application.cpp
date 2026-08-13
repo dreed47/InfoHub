@@ -1,8 +1,6 @@
 #include "infohub/application.hpp"
 
 #include <algorithm>
-#include <cstring>
-#include <vector>
 
 #include "driver/gpio.h"
 #include "esp_check.h"
@@ -155,18 +153,12 @@ void Application::run() {
     }
   }
 
-  // Per-event enable flags and optional custom PCM blobs.
-  for (uint8_t i = 0; i < AudioNotifier::kEventCount; ++i) {
-    audio_notifier_.set_event_enabled(
-        static_cast<AudioNotifier::Event>(i),
-        config_store_.load_audio_event_enabled(i));
-    const std::vector<uint8_t> pcm_bytes = config_store_.load_audio_event_pcm(i);
-    if (!pcm_bytes.empty() && (pcm_bytes.size() % sizeof(int16_t)) == 0) {
-      std::vector<int16_t> samples(pcm_bytes.size() / sizeof(int16_t));
-      std::memcpy(samples.data(), pcm_bytes.data(), pcm_bytes.size());
-      audio_notifier_.set_event_pcm(static_cast<AudioNotifier::Event>(i), std::move(samples));
-    }
-  }
+  // Per-event enable flags and custom PCM blobs for the 8 built-in events
+  // are restored by PrinterPlugin::init() below, not here — those events are
+  // printer-domain (every play() call site lives in that plugin), so a
+  // printer-disabled build has nothing to restore. AudioNotifier itself
+  // stays core: initialize() below only wires up storage pointers, it
+  // doesn't need any event state populated yet.
   if (audio_notifier_.initialize() != ESP_OK) {
     ESP_LOGW(kTag, "Audio notifier init failed - sound disabled this boot");
   }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -426,6 +427,28 @@ void card_reveal_y_exec_cb(void* obj, int32_t val) {
 void card_reveal_opa_exec_cb(void* obj, int32_t val) {
   lv_obj_set_style_opa(static_cast<lv_obj_t*>(obj), static_cast<lv_opa_t>(val), 0);
 }
+
+// Built-in AudioNotifier::Event enable-flag/display-name storage, moved here
+// from ConfigStore's old ordinal-indexed load/save_audio_event_enabled/
+// filename (see CLAUDE.md's AudioNotifier sketch: these 8 events are
+// printer-domain — every play() call site lives in this plugin). Keyed by
+// this plugin's own NVS namespace via ConfigStore::load/save_plugin_string,
+// same mechanism every other plugin's settings use. PCM blob storage stays
+// on ConfigStore unchanged (still ordinal-indexed LittleFS paths) — only the
+// enable flag and display name moved.
+constexpr uint8_t kAudioEventCount = 8;  // == AudioNotifier::kEventCount
+// Print Started/Finished/Error/HMS/Paused and Click default on; Filament
+// Change and Reconnect default off (matches the old ConfigStore behavior).
+constexpr bool kAudioEventDefaultEnabled[kAudioEventCount] = {
+    true, true, true, true, true, false, false, true,
+};
+
+void audio_event_enable_key(uint8_t idx, char* buf, size_t buf_size) {
+  std::snprintf(buf, buf_size, "snd_en_%u", static_cast<unsigned>(idx));
+}
+void audio_event_filename_key(uint8_t idx, char* buf, size_t buf_size) {
+  std::snprintf(buf, buf_size, "snd_fn_%u", static_cast<unsigned>(idx));
+}
 }  // namespace
 
 esp_err_t PrinterPlugin::init(PluginContext& ctx) {
@@ -463,7 +486,66 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   // disabled-at-boot printer simply never gets its pages shown, and an
   // enabled one shows them via its own first update_ui() tick (mirrors
   // WeatherPlugin's existing pattern).
+
+  // Restore per-event enable flags and any custom PCM blobs for this
+  // plugin's 8 built-in AudioNotifier events. Moved here from
+  // Application::run() — these are printer-domain events (every play() call
+  // site lives in this plugin), so restoring them is this plugin's job, not
+  // core's. AudioNotifier::initialize() (called earlier in Application::run())
+  // only wires up storage pointers, it doesn't consume event state at that
+  // point, so restoring after it here is safe.
+  for (uint8_t i = 0; i < kAudioEventCount; ++i) {
+    audio_notifier_->set_event_enabled(static_cast<AudioNotifier::Event>(i),
+                                        audio_event_enabled(i));
+    const std::vector<uint8_t> pcm_bytes = config_store_->load_audio_event_pcm(i);
+    if (!pcm_bytes.empty() && (pcm_bytes.size() % sizeof(int16_t)) == 0) {
+      std::vector<int16_t> samples(pcm_bytes.size() / sizeof(int16_t));
+      std::memcpy(samples.data(), pcm_bytes.data(), pcm_bytes.size());
+      audio_notifier_->set_event_pcm(static_cast<AudioNotifier::Event>(i), std::move(samples));
+    }
+  }
   return ESP_OK;
+}
+
+bool PrinterPlugin::audio_event_enabled(uint8_t event_idx) const {
+  if (event_idx >= kAudioEventCount) {
+    return true;
+  }
+  char key[16] = {};
+  audio_event_enable_key(event_idx, key, sizeof(key));
+  const std::string stored = config_store_->load_plugin_string(id(), key);
+  if (stored.empty()) {
+    return kAudioEventDefaultEnabled[event_idx];
+  }
+  return stored == "1";
+}
+
+esp_err_t PrinterPlugin::save_audio_event_enabled(uint8_t event_idx, bool enabled) const {
+  if (event_idx >= kAudioEventCount) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  char key[16] = {};
+  audio_event_enable_key(event_idx, key, sizeof(key));
+  return config_store_->save_plugin_string(id(), key, enabled ? "1" : "0");
+}
+
+std::string PrinterPlugin::audio_event_display_name(uint8_t event_idx) const {
+  if (event_idx >= kAudioEventCount) {
+    return {};
+  }
+  char key[16] = {};
+  audio_event_filename_key(event_idx, key, sizeof(key));
+  return config_store_->load_plugin_string(id(), key);
+}
+
+esp_err_t PrinterPlugin::save_audio_event_display_name(uint8_t event_idx,
+                                                         const std::string& name) const {
+  if (event_idx >= kAudioEventCount) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  char key[16] = {};
+  audio_event_filename_key(event_idx, key, sizeof(key));
+  return config_store_->save_plugin_string(id(), key, name);
 }
 
 void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
