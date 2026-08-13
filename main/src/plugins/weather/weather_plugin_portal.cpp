@@ -7,7 +7,6 @@
 #include <cstdlib>
 
 #include "cJSON.h"
-#include "esp_log.h"
 #include "infohub/config_store.hpp"
 #include "infohub/portal_shared.hpp"
 #include "infohub/setup_portal.hpp"
@@ -16,7 +15,6 @@
 namespace infohub {
 
 namespace {
-constexpr char kTag[] = "infohub.weather";
 constexpr char kPluginNs[] = "weather";
 
 // Same empty-submission-reuses-stored-value convention as PrinterPlugin's
@@ -94,12 +92,6 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   const std::string submitted_api_token = read_string_field(root, "api_token");
   const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
   const std::string units_field = trim_copy(read_string_field(root, "units"));
-  char* raw_json = cJSON_PrintUnformatted(root);
-  ESP_LOGI(kTag, "[DIAG] config_post raw body=%s units_field='%s'", raw_json ? raw_json : "(null)",
-           units_field.c_str());
-  if (raw_json != nullptr) {
-    cJSON_free(raw_json);
-  }
   cJSON_Delete(root);
 
   const std::string stored_api_token =
@@ -119,16 +111,10 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
   plugin->config_store_->save_plugin_string(kPluginNs, "station_id", submitted_station_id);
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
   plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
-  const esp_err_t units_save_err =
-      plugin->config_store_->save_plugin_string(kPluginNs, "units", fahrenheit ? "f" : "c");
-  const std::string units_readback = plugin->config_store_->load_plugin_string(kPluginNs, "units");
-  ESP_LOGI(kTag, "[DIAG] units save_err=%s fahrenheit=%d readback='%s' in_memory_before=%d",
-           esp_err_to_name(units_save_err), fahrenheit, units_readback.c_str(),
-           plugin->fahrenheit());
+  plugin->config_store_->save_plugin_string(kPluginNs, "units", fahrenheit ? "f" : "c");
 
   plugin->client_.configure(submitted_station_id, api_token, poll_interval_s);
   plugin->set_fahrenheit(fahrenheit);
-  ESP_LOGI(kTag, "[DIAG] in_memory_after=%d", plugin->fahrenheit());
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;
