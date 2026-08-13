@@ -24,6 +24,42 @@ set(INFOHUB_MAIN_REQUIRES
 set(INFOHUB_MAIN_PRIV_REQUIRES)
 
 set(INFOHUB_PLUGIN_SRCS)
+set(INFOHUB_PLUGIN_EMBED_TXTFILES)
+if(CONFIG_INFOHUB_PLUGIN_PRINTER)
+    list(APPEND INFOHUB_PLUGIN_SRCS
+        "src/plugins/printer/bambu_status.cpp"
+        "src/plugins/printer/bambu_cloud_client.cpp"
+        "src/plugins/printer/error_lookup.cpp"
+        "src/plugins/printer/printer_plugin.cpp"
+        "src/plugins/printer/printer_plugin_portal.cpp"
+        "src/plugins/printer/p1s_camera_client.cpp"
+        "src/plugins/printer/printer_client.cpp"
+        "src/plugins/printer/printer_state.cpp"
+        "src/plugins/printer/status_resolver.cpp"
+    )
+    list(APPEND INFOHUB_PLUGIN_EMBED_TXTFILES
+        "include/infohub/plugins/printer/bambu.cert"
+        "include/infohub/plugins/printer/bambu_p2s_250626.cert"
+        "include/infohub/plugins/printer/bambu_h2c_251122.cert"
+        "include/infohub/plugins/printer/bambu_x2c_260425.cert"
+        "include/infohub/plugins/printer/error_lookup.tsv"
+    )
+endif()
+# mqtt (local MQTT status/commands) and espressif__esp_new_jpeg (P1S camera
+# JPEG decode) are exclusively used by printer-plugin code, but stay in the
+# unconditional REQUIRES list above rather than gated behind
+# CONFIG_INFOHUB_PLUGIN_PRINTER: ESP-IDF evaluates each component's
+# CMakeLists.txt twice — an early pass that builds the global component
+# dependency graph (where CONFIG_* Kconfig variables are NOT yet populated,
+# confirmed empirically), then a second real pass. A REQUIRES list gated on
+# a CONFIG_* value is silently wrong from that first pass onward, breaking
+# the build with "not in the requirements list" errors regardless of the
+# option's actual value. SRCS/EMBED_TXTFILES gating (above and elsewhere in
+# this file) doesn't have this problem — only actual file inclusion matters
+# there. With printer's own .cpp files excluded via SRCS when the plugin is
+# disabled, nothing calls into mqtt/jpeg, and the linker's --gc-sections
+# strips their unused code from the final image regardless.
+
 if(CONFIG_INFOHUB_PLUGIN_WEATHER)
     list(APPEND INFOHUB_PLUGIN_SRCS
         "src/plugins/weather/weather_flow_client.cpp"
@@ -32,7 +68,6 @@ if(CONFIG_INFOHUB_PLUGIN_WEATHER)
     )
 endif()
 
-set(INFOHUB_PLUGIN_EMBED_TXTFILES)
 if(CONFIG_INFOHUB_PLUGIN_STOCKS)
     list(APPEND INFOHUB_PLUGIN_SRCS
         "src/plugins/stocks/stock_client.cpp"
@@ -69,28 +104,16 @@ idf_component_register(
         "app_main.cpp"
         "src/application.cpp"
         "src/audio_notifier.cpp"
-        "src/plugins/printer/bambu_status.cpp"
-        "src/plugins/printer/bambu_cloud_client.cpp"
         "src/config_store.cpp"
-        "src/plugins/printer/error_lookup.cpp"
         "src/network_arbiter.cpp"
         "src/plugin_registry.cpp"
-        "src/plugins/printer/printer_plugin.cpp"
-        "src/plugins/printer/printer_plugin_portal.cpp"
         "include/font/dosis_20.c"
-        "include/font/dosis_32.c"
         "include/font/dosis_40.c"
-        "include/img/bambuicon.c"
         "include/font/mdi_30.c"
-        "include/font/mdi_40.c"
         "src/pmu.cpp"
-        "src/plugins/printer/p1s_camera_client.cpp"
-        "src/plugins/printer/printer_client.cpp"
-        "src/plugins/printer/printer_state.cpp"
         "src/debug_log_buffer.cpp"
         "src/setup_portal.cpp"
         "src/serial_provisioner.cpp"
-        "src/plugins/printer/status_resolver.cpp"
         "src/time_sync.cpp"
         "src/ui.cpp"
         "src/ui_shell.cpp"
@@ -100,16 +123,6 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     EMBED_TXTFILES
-        # Printer-plugin trust material + error-lookup table. Unconditional
-        # for now — the printer plugin isn't actually optional yet (no
-        # Kconfig toggle exists), so there's nothing to gate this behind.
-        # See the "AudioNotifier and error_lookup changes sketch" in
-        # CLAUDE.md for when that changes.
-        "include/infohub/plugins/printer/bambu.cert"
-        "include/infohub/plugins/printer/bambu_p2s_250626.cert"
-        "include/infohub/plugins/printer/bambu_h2c_251122.cert"
-        "include/infohub/plugins/printer/bambu_x2c_260425.cert"
-        "include/infohub/plugins/printer/error_lookup.tsv"
         ${INFOHUB_PLUGIN_EMBED_TXTFILES}
     REQUIRES
         ${INFOHUB_MAIN_REQUIRES}

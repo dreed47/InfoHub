@@ -1,5 +1,17 @@
 menu "InfoHub"
 
+    config INFOHUB_PLUGIN_PRINTER
+        bool "Enable printer plugin (Bambu Lab cloud/local MQTT status)"
+        default y
+        help
+            Enables the printer plugin: Bambu Cloud + local MQTT connectivity,
+            AMS/filament display, print status dashboard, camera preview, and
+            the printer-selector home screen. This is InfoHub's original,
+            flagship feature and is enabled by default. Disable it to build a
+            printer-free info-display firmware (e.g. weather/stocks only) —
+            all printer-specific code, TLS trust anchors, and MQTT/JPEG
+            dependencies are compiled out entirely.
+
     config INFOHUB_PLUGIN_WEATHER
         bool "Enable weather plugin (WeatherFlow Tempest cloud API)"
         default n
@@ -28,6 +40,7 @@ menu "InfoHub"
     config INFOHUB_EXPERIMENTAL_PRINT_CONTROL
         bool "Enable experimental print control buttons (Pause/Resume/Stop)"
         default n
+        depends on INFOHUB_PLUGIN_PRINTER
         help
             Enables on-display Pause/Resume/Stop buttons on the cloud preview
             page (page2). When disabled (default), the cover image is shown at
