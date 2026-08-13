@@ -459,6 +459,10 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   pmu_manager_ = &ctx.pmu_manager;
   audio_notifier_ = &ctx.audio_notifier;
 
+  cloud_client_.set_network_arbiter(&ctx.network_arbiter);
+  printer_client_.set_network_arbiter(&ctx.network_arbiter);
+  camera_client_.set_network_arbiter(&ctx.network_arbiter);
+
   const BambuCloudCredentials cloud_credentials = ctx.config_store.load_cloud_credentials();
   source_mode_ = ctx.config_store.load_source_mode();
   const PrinterConnection printer_connection =

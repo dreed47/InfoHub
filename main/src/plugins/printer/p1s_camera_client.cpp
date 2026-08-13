@@ -14,6 +14,7 @@
 #include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "esp_tls.h"
+#include "infohub/network_arbiter.hpp"
 
 namespace infohub {
 
@@ -290,9 +291,19 @@ bool P1sCameraClient::ensure_connected(const PrinterConnection& connection) {
     return false;
   }
 
+  // esp_tls_conn_new_sync() blocks until the TLS handshake resolves (success
+  // or failure) -- see WeatherFlowClient::perform_json_request() for why a
+  // synchronous acquire/release around just this one call is correct.
+  if (network_arbiter_ != nullptr && !network_arbiter_->try_acquire_handshake_slot("camera.tls")) {
+    disconnect();
+    return false;
+  }
   const int connect_result = esp_tls_conn_new_sync(connection.host.c_str(),
                                                    static_cast<int>(connection.host.size()),
                                                    kCameraPort, &tls_cfg, tls_);
+  if (network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("camera.tls");
+  }
   if (connect_result != 1) {
     ESP_LOGW(kTag, "Camera TLS connect failed");
     disconnect();

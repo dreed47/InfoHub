@@ -15,6 +15,7 @@ class Ui;
 class SetupPortal;
 class PmuManager;
 class AudioNotifier;
+class NetworkArbiter;
 
 // Maximum number of plugins compiled into one firmware image. Each plugin is
 // a compile-time unit (own Kconfig toggle + source files), not a
@@ -33,6 +34,9 @@ struct PluginContext {
   SetupPortal& setup_portal;
   PmuManager& pmu_manager;
   AudioNotifier& audio_notifier;
+  // Shared handshake-serialization slot across every plugin's own network
+  // clients — see NetworkArbiter.
+  NetworkArbiter& network_arbiter;
 };
 
 // Base class every plugin implements. Phase 8a: PrinterPlugin is now the

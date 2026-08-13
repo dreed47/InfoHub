@@ -26,6 +26,7 @@
 #include "esp_tls.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "infohub/network_arbiter.hpp"
 #include "mbedtls/base64.h"
 
 namespace infohub {
@@ -2330,6 +2331,7 @@ void BambuCloudClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
 
   switch (static_cast<esp_mqtt_event_id_t>(event->event_id)) {
     case MQTT_EVENT_CONNECTED: {
+      release_handshake_slot_if_held();
       mqtt_connected_ = true;
       mqtt_consecutive_failures_.store(0, std::memory_order_relaxed);
       mqtt_total_successes_.fetch_add(1, std::memory_order_relaxed);
@@ -2390,6 +2392,7 @@ void BambuCloudClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
     }
 
     case MQTT_EVENT_DISCONNECTED:
+      release_handshake_slot_if_held();
       mqtt_connected_ = false;
       mqtt_consecutive_failures_.fetch_add(1, std::memory_order_relaxed);
       mqtt_total_failures_.fetch_add(1, std::memory_order_relaxed);
@@ -2449,6 +2452,7 @@ void BambuCloudClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
     }
 
     case MQTT_EVENT_ERROR:
+      release_handshake_slot_if_held();
       mqtt_connected_ = false;
       mqtt_consecutive_failures_.fetch_add(1, std::memory_order_relaxed);
       mqtt_total_failures_.fetch_add(1, std::memory_order_relaxed);
@@ -2491,6 +2495,15 @@ void BambuCloudClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
   }
 }
 
+void BambuCloudClient::release_handshake_slot_if_held() {
+  if (network_arbiter_ == nullptr) {
+    return;
+  }
+  if (handshake_slot_held_.exchange(false, std::memory_order_acq_rel)) {
+    network_arbiter_->release_handshake_slot("cloud.mqtt");
+  }
+}
+
 void BambuCloudClient::stop_mqtt_client() {
   if (mqtt_client_ != nullptr && task_handle_ != nullptr &&
       xTaskGetCurrentTaskHandle() != task_handle_) {
@@ -2511,6 +2524,9 @@ void BambuCloudClient::stop_mqtt_client() {
     incoming_topic_.clear();
     incoming_payload_.clear();
   }
+  // Safety net: releases if the handshake was torn down before any event
+  // resolved it (e.g. this stop was requested mid-connect). No-op otherwise.
+  release_handshake_slot_if_held();
   if (mqtt_client_ != nullptr) {
     esp_mqtt_client_stop(mqtt_client_);
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -2764,9 +2780,22 @@ bool BambuCloudClient::ensure_mqtt_client_started() {
   mqtt_cfg.network.timeout_ms = 10000;
   mqtt_cfg.network.reconnect_timeout_ms = 15000;
 
+  // esp_mqtt_client_start() below is async, same rationale as
+  // PrinterClient's local MQTT connect -- see the comment there. Skip this
+  // attempt if no slot is free; the backoff/retry mechanism already in place
+  // here handles retrying on a later call.
+  if (network_arbiter_ != nullptr &&
+      !network_arbiter_->try_acquire_handshake_slot("cloud.mqtt")) {
+    return false;
+  }
+  if (network_arbiter_ != nullptr) {
+    handshake_slot_held_.store(true, std::memory_order_release);
+  }
+
   log_heap_diag("cloud mqtt before client init");
   mqtt_client_ = esp_mqtt_client_init(&mqtt_cfg);
   if (mqtt_client_ == nullptr) {
+    release_handshake_slot_if_held();
     ESP_LOGW(kTag, "Failed to create Bambu Cloud MQTT client");
     log_heap_diag("cloud mqtt client init failed");
     arm_mqtt_start_backoff("init");
@@ -2777,6 +2806,7 @@ bool BambuCloudClient::ensure_mqtt_client_started() {
   esp_mqtt_client_register_event(mqtt_client_, MQTT_EVENT_ANY,
                                  &BambuCloudClient::mqtt_event_handler, this);
   if (esp_mqtt_client_start(mqtt_client_) != ESP_OK) {
+    release_handshake_slot_if_held();
     ESP_LOGW(kTag, "Failed to start Bambu Cloud MQTT client");
     esp_mqtt_client_destroy(mqtt_client_);
     mqtt_client_ = nullptr;
@@ -3941,7 +3971,19 @@ bool BambuCloudClient::authenticate_with_tfa_code(const std::string& code) {
   esp_http_client_set_header(client, "Accept", "application/json");
   esp_http_client_set_header(client, "Content-Type", "application/json");
 
+  // See perform_json_request() above for why a synchronous acquire/release
+  // around just this one blocking call is correct.
+  if (network_arbiter_ != nullptr &&
+      !network_arbiter_->try_acquire_handshake_slot("cloud.http")) {
+    esp_http_client_cleanup(client);
+    apply_cloud_session_state(true, false, true, true,
+                              "Bambu Cloud 2FA connection failed", false, true);
+    return false;
+  }
   const esp_err_t open_err = esp_http_client_open(client, static_cast<int>(request_body.size()));
+  if (network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("cloud.http");
+  }
   if (open_err != ESP_OK) {
     ESP_LOGW(kTag, "HTTP open failed for TFA: %s", esp_err_to_name(open_err));
     esp_http_client_cleanup(client);
@@ -4468,7 +4510,19 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
     esp_http_client_set_header(client, "Accept-Encoding", "identity");
     esp_http_client_set_header(client, "User-Agent", "InfoHub/1.0");
 
+    // esp_http_client_perform() blocks through the whole request (connect +
+    // send + receive) -- see perform_json_request() above for why a
+    // synchronous acquire/release around just this one call is correct.
+    const bool got_slot = network_arbiter_ == nullptr ||
+                          network_arbiter_->try_acquire_handshake_slot("cloud.http");
+    if (!got_slot) {
+      esp_http_client_cleanup(client);
+      return nullptr;
+    }
     perform_err = esp_http_client_perform(client);
+    if (network_arbiter_ != nullptr) {
+      network_arbiter_->release_handshake_slot("cloud.http");
+    }
     status_code = esp_http_client_get_status_code(client);
     content_length = esp_http_client_get_content_length(client);
     complete = esp_http_client_is_complete_data_received(client);
@@ -4542,6 +4596,20 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
     esp_http_client_set_header(range_client, "User-Agent", "InfoHub/1.0");
   }
 
+  // range_config.keep_alive_enable=true reuses one TLS connection across
+  // every chunk in the loop below -- only the loop's first perform() call
+  // (offset==0) does an actual handshake, so the slot is acquired once
+  // before the loop and released right after that first call resolves, not
+  // held for the whole (potentially many-chunk, many-second) download.
+  bool range_handshake_slot_held = false;
+  if (range_client != nullptr && !range_failed && network_arbiter_ != nullptr) {
+    if (network_arbiter_->try_acquire_handshake_slot("cloud.http")) {
+      range_handshake_slot_held = true;
+    } else {
+      range_failed = true;
+    }
+  }
+
   for (size_t offset = 0; !range_failed && range_client != nullptr && offset < kMaxPreviewBytes;
        offset += kPreviewRangeChunkBytes) {
     std::vector<uint8_t> chunk;
@@ -4560,6 +4628,10 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
     esp_http_client_set_header(range_client, "Range", range_header);
 
     const esp_err_t range_err = esp_http_client_perform(range_client);
+    if (offset == 0 && range_handshake_slot_held) {
+      network_arbiter_->release_handshake_slot("cloud.http");
+      range_handshake_slot_held = false;
+    }
     const int range_status = esp_http_client_get_status_code(range_client);
     const bool range_complete = esp_http_client_is_complete_data_received(range_client);
 
@@ -4590,6 +4662,12 @@ std::shared_ptr<std::vector<uint8_t>> BambuCloudClient::download_preview_image(c
         chunk.size() < kPreviewRangeChunkBytes) {
       break;
     }
+  }
+
+  // Safety net: covers the loop-never-ran case (kMaxPreviewBytes==0, or the
+  // acquire itself failed above without entering the loop at all).
+  if (range_handshake_slot_held && network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("cloud.http");
   }
 
   if (range_client != nullptr) {
@@ -4772,7 +4850,18 @@ bool BambuCloudClient::perform_json_request(const std::string& url, const char* 
     esp_http_client_set_header(client, "Authorization", authorization.c_str());
   }
 
+  // esp_http_client_open() blocks until the TCP+TLS handshake resolves --
+  // see WeatherFlowClient::perform_json_request() for why a synchronous
+  // acquire/release around just this one call is correct.
+  if (network_arbiter_ != nullptr &&
+      !network_arbiter_->try_acquire_handshake_slot("cloud.http")) {
+    esp_http_client_cleanup(client);
+    return false;
+  }
   const esp_err_t open_err = esp_http_client_open(client, static_cast<int>(request_body.size()));
+  if (network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("cloud.http");
+  }
   if (open_err != ESP_OK) {
     ESP_LOGW(kTag, "HTTP open failed for %s: %s", url.c_str(), esp_err_to_name(open_err));
     esp_http_client_cleanup(client);

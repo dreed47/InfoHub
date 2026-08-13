@@ -4,6 +4,7 @@
 
 #include "infohub/audio_notifier.hpp"
 #include "infohub/config_store.hpp"
+#include "infohub/network_arbiter.hpp"
 #include "infohub/plugin.hpp"
 #include "infohub/pmu.hpp"
 #include "infohub/setup_portal.hpp"
@@ -38,6 +39,11 @@ class Application {
   Ui ui_{};
   PmuManager pmu_manager_{};
   AudioNotifier audio_notifier_{};
+  // Shared handshake-serialization primitive across every plugin's network
+  // clients (TLS/MQTT/HTTPS). Core, unconditional -- a weather+stocks-only
+  // build still needs its two independent HTTP clients coordinated, not just
+  // printer's three.
+  NetworkArbiter network_arbiter_{};
 #if CONFIG_INFOHUB_PLUGIN_PRINTER
   PrinterPlugin printer_plugin_{};
 #endif

@@ -14,6 +14,7 @@
 namespace infohub {
 
 class WifiManager;
+class NetworkArbiter;
 
 constexpr uint8_t kHourlyForecastCount = 4;
 
@@ -89,6 +90,9 @@ class WeatherFlowClient {
   // fails outright (DNS has no route yet), and then waits a full
   // poll_interval_s before trying again.
   void set_wifi_manager(const WifiManager* wifi_manager) { wifi_manager_ = wifi_manager; }
+  // Shared handshake-serialization slot -- see NetworkArbiter. May be null
+  // (falls back to unconditional connect, same as before this existed).
+  void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
 
   // Sets station_id/api_token/poll interval and wakes the task for an
   // immediate fetch. Passing an empty station_id or api_token marks the
@@ -110,6 +114,7 @@ class WeatherFlowClient {
 
   TaskHandle_t task_handle_ = nullptr;
   const WifiManager* wifi_manager_ = nullptr;
+  NetworkArbiter* network_arbiter_ = nullptr;
 
   mutable std::mutex config_mutex_;
   std::string station_id_;

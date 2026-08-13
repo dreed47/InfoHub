@@ -18,6 +18,8 @@ struct cJSON;
 
 namespace infohub {
 
+class NetworkArbiter;
+
 class PrinterClient {
  public:
   PrinterClient() = default;
@@ -29,6 +31,9 @@ class PrinterClient {
   // notify_cloud_presence()) so that we don't sit in a 30 s backoff window when
   // Wi-Fi comes back.
   void set_network_ready(bool ready);
+  // Shared handshake-serialization slot -- see NetworkArbiter. May be null
+  // (falls back to unconditional connect, same as before this existed).
+  void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
   // Hook driven by the Bambu Cloud MQTT feed: when the cloud reports that the
   // printer has just come back online (`client.connected`), we can short-circuit
   // the current reconnect backoff and attempt a local connection immediately
@@ -108,6 +113,9 @@ class PrinterClient {
   void handle_report_payload(const char* payload, size_t length);
   void task_loop();
   void stop_client();
+  // No-op if no slot is currently held (safe to call from multiple teardown
+  // paths -- CONNECTED/DISCONNECTED/ERROR events, stop_client()).
+  void release_handshake_slot_if_held();
   void schedule_client_rebuild(const char* reason, uint32_t delay_ms = 1500,
                                bool force_when_connected = false);
   void cancel_client_rebuild();
@@ -148,6 +156,13 @@ class PrinterClient {
   LocalPrinterRuntimeState runtime_state_{};
   TaskHandle_t task_handle_ = nullptr;
   esp_mqtt_client_handle_t client_ = nullptr;
+  NetworkArbiter* network_arbiter_ = nullptr;
+  // esp_mqtt_client_start() is async -- the handshake resolves later via
+  // mqtt_event_handler (MQTT_EVENT_CONNECTED/DISCONNECTED/ERROR), so unlike
+  // the blocking HTTP/TLS clients this needs an explicit held-flag to
+  // release exactly once regardless of which event (or stop_client()
+  // tearing down mid-handshake) resolves it first.
+  std::atomic<bool> handshake_slot_held_{false};
   std::string client_id_{};
   std::string report_topic_{};
   std::string request_topic_{};

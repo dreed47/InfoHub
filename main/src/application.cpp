@@ -180,7 +180,8 @@ void Application::run() {
   ESP_ERROR_CHECK(ui_.initialize());
 
   PluginContext plugin_ctx{config_store_, wifi_manager_,   ui_,
-                           setup_portal_,  pmu_manager_,    audio_notifier_};
+                           setup_portal_,  pmu_manager_,    audio_notifier_,
+                           network_arbiter_};
   for (Plugin* plugin : plugins_) {
     if (plugin == nullptr) {
       continue;

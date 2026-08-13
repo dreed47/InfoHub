@@ -13,6 +13,7 @@
 namespace infohub {
 
 class WifiManager;
+class NetworkArbiter;
 
 constexpr uint8_t kStockSymbolCount = 4;
 
@@ -66,6 +67,9 @@ class StockClient {
   // Must be called before start() (or at least before Wi-Fi connects) — same
   // rationale as WeatherFlowClient::set_wifi_manager().
   void set_wifi_manager(const WifiManager* wifi_manager) { wifi_manager_ = wifi_manager; }
+  // Shared handshake-serialization slot -- see NetworkArbiter. May be null
+  // (falls back to unconditional connect, same as before this existed).
+  void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
 
   // Sets symbols/api_key/poll interval and wakes the task for an immediate
   // fetch. Empty entries in `symbols` are skipped when fetching. Passing an
@@ -86,6 +90,7 @@ class StockClient {
 
   TaskHandle_t task_handle_ = nullptr;
   const WifiManager* wifi_manager_ = nullptr;
+  NetworkArbiter* network_arbiter_ = nullptr;
 
   mutable std::mutex config_mutex_;
   std::array<std::string, kStockSymbolCount> symbols_{};

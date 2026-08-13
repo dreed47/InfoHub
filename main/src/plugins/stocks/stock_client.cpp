@@ -7,6 +7,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "infohub/network_arbiter.hpp"
 #include "infohub/wifi_manager.hpp"
 
 // Alpha Vantage's cert chain (alphavantage.co -> Google Trust Services WE1 ->
@@ -263,7 +264,16 @@ bool StockClient::perform_json_request(const std::string& url, int* status_code,
   }
   esp_http_client_set_header(client, "Accept", "application/json");
 
+  // See WeatherFlowClient::perform_json_request() for why a synchronous
+  // acquire/release around just this one blocking call is correct here.
+  if (network_arbiter_ != nullptr && !network_arbiter_->try_acquire_handshake_slot("stocks.http")) {
+    esp_http_client_cleanup(client);
+    return false;
+  }
   const esp_err_t open_err = esp_http_client_open(client, 0);
+  if (network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("stocks.http");
+  }
   if (open_err != ESP_OK) {
     ESP_LOGW(kTag, "HTTP open failed: %s", esp_err_to_name(open_err));
     esp_http_client_cleanup(client);

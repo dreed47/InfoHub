@@ -19,6 +19,7 @@
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "infohub/network_arbiter.hpp"
 
 namespace infohub {
 
@@ -1395,6 +1396,7 @@ void PrinterClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
 
   switch (static_cast<esp_mqtt_event_id_t>(event->event_id)) {
     case MQTT_EVENT_CONNECTED: {
+      release_handshake_slot_if_held();
       const uint64_t connect_started_ms =
           mqtt_connect_started_ms_.load(std::memory_order_relaxed);
       const uint64_t connect_elapsed_ms =
@@ -1487,6 +1489,7 @@ void PrinterClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
     }
 
     case MQTT_EVENT_DISCONNECTED: {
+      release_handshake_slot_if_held();
       const uint64_t connect_started_ms =
           mqtt_connect_started_ms_.load(std::memory_order_relaxed);
       const uint64_t connect_elapsed_ms =
@@ -1563,6 +1566,7 @@ void PrinterClient::handle_mqtt_event(esp_mqtt_event_handle_t event) {
     }
 
     case MQTT_EVENT_ERROR: {
+      release_handshake_slot_if_held();
       const uint64_t connect_started_ms =
           mqtt_connect_started_ms_.load(std::memory_order_relaxed);
       const uint64_t connect_elapsed_ms =
@@ -2378,7 +2382,20 @@ void PrinterClient::handle_report_payload(const char* payload, size_t length) {
   cJSON_Delete(root);
 }
 
+void PrinterClient::release_handshake_slot_if_held() {
+  if (network_arbiter_ == nullptr) {
+    return;
+  }
+  if (handshake_slot_held_.exchange(false, std::memory_order_acq_rel)) {
+    network_arbiter_->release_handshake_slot("printer.mqtt");
+  }
+}
+
 void PrinterClient::stop_client() {
+  // Safety net: if the task/reconfigure/rebuild path tears the client down
+  // before any event resolved the handshake (e.g. reconfigure_requested_
+  // interrupts mid-connect), release here so the slot isn't stuck held.
+  release_handshake_slot_if_held();
   mqtt_connected_ = false;
   session_ever_established_ = false;
   received_payload_ = false;
@@ -2766,8 +2783,24 @@ void PrinterClient::task_loop() {
                mqtt_cfg.buffer.out_size, static_cast<unsigned>(local_ca_bundle.size()),
                connection.mqtt_username.c_str(),
                static_cast<unsigned>(connection.access_code.size()));
+      // esp_mqtt_client_start() below is async -- it returns immediately and
+      // the actual TLS handshake resolves later via handle_mqtt_event()
+      // (CONNECTED/DISCONNECTED/ERROR), which is where the slot gets
+      // released. Skip this whole reconnect attempt if no slot is free right
+      // now; task_loop() retries on its next iteration same as any other
+      // backoff path here.
+      if (network_arbiter_ != nullptr &&
+          !network_arbiter_->try_acquire_handshake_slot("printer.mqtt")) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+        continue;
+      }
+      if (network_arbiter_ != nullptr) {
+        handshake_slot_held_.store(true, std::memory_order_release);
+      }
+
       client_ = esp_mqtt_client_init(&mqtt_cfg);
       if (client_ == nullptr) {
+        release_handshake_slot_if_held();
         LocalPrinterRuntimeState failed = runtime_state_copy();
         failed.connection = PrinterConnectionState::kError;
         failed.lifecycle = PrintLifecycleState::kError;
@@ -2791,6 +2824,7 @@ void PrinterClient::task_loop() {
       mqtt_last_attempt_ms_.store(now_ms(), std::memory_order_relaxed);
       esp_mqtt_client_register_event(client_, MQTT_EVENT_ANY, &PrinterClient::mqtt_event_handler, this);
       if (esp_mqtt_client_start(client_) != ESP_OK) {
+        release_handshake_slot_if_held();
         LocalPrinterRuntimeState failed = runtime_state_copy();
         failed.connection = PrinterConnectionState::kError;
         failed.lifecycle = PrintLifecycleState::kError;

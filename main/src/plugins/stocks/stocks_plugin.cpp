@@ -41,6 +41,7 @@ esp_err_t StocksPlugin::init(PluginContext& ctx) {
   ui_ = &ctx.ui;
 
   client_.set_wifi_manager(wifi_manager_);
+  client_.set_network_arbiter(&ctx.network_arbiter);
   load_config();
 
   const esp_err_t err = client_.start();

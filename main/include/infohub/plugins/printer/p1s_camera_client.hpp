@@ -16,6 +16,8 @@
 
 namespace infohub {
 
+class NetworkArbiter;
+
 struct P1sCameraSnapshot {
   bool configured = false;
   bool enabled = false;
@@ -33,6 +35,9 @@ class P1sCameraClient {
   void configure(PrinterConnection connection);
   bool is_configured() const;
   void set_network_ready(bool ready) { network_ready_.store(ready); }
+  // Shared handshake-serialization slot -- see NetworkArbiter. May be null
+  // (falls back to unconditional connect, same as before this existed).
+  void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
   void set_enabled(bool enabled) { enabled_.store(enabled); }
   void request_refresh() { refresh_requested_.store(true); }
   void observe_printer_snapshot(const PrinterSnapshot& snapshot);
@@ -72,6 +77,7 @@ class P1sCameraClient {
   bool observed_signature_required_ = false;
   TaskHandle_t task_handle_ = nullptr;
   esp_tls_t* tls_ = nullptr;
+  NetworkArbiter* network_arbiter_ = nullptr;
   std::atomic<bool> network_ready_{false};
   std::atomic<bool> enabled_{false};
   std::atomic<bool> refresh_requested_{false};

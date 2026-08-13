@@ -17,6 +17,7 @@ bool NetworkArbiter::try_acquire_handshake_slot(const char* owner_id) {
       return true;
     }
   }
+  ESP_LOGD(kTag, "Handshake slot DENIED to %s (busy)", owner_id ? owner_id : "?");
   return false;
 }
 

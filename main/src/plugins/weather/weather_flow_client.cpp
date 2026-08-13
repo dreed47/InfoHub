@@ -8,6 +8,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "infohub/network_arbiter.hpp"
 #include "infohub/wifi_manager.hpp"
 
 namespace infohub {
@@ -371,7 +372,20 @@ bool WeatherFlowClient::perform_json_request(const std::string& url, int* status
   }
   esp_http_client_set_header(client, "Accept", "application/json");
 
+  // esp_http_client_open() is the blocking TCP+TLS connect -- the actual
+  // handshake NetworkArbiter exists to serialize across plugins. It fully
+  // resolves (success or failure) by the time this call returns, so a
+  // synchronous acquire/release around just this one call is correct (no
+  // async event-handler bookkeeping needed, unlike an MQTT client's
+  // esp_mqtt_client_start()).
+  if (network_arbiter_ != nullptr && !network_arbiter_->try_acquire_handshake_slot("weather.http")) {
+    esp_http_client_cleanup(client);
+    return false;
+  }
   const esp_err_t open_err = esp_http_client_open(client, 0);
+  if (network_arbiter_ != nullptr) {
+    network_arbiter_->release_handshake_slot("weather.http");
+  }
   if (open_err != ESP_OK) {
     ESP_LOGW(kTag, "HTTP open failed: %s", esp_err_to_name(open_err));
     esp_http_client_cleanup(client);

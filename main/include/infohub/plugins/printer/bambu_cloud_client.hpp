@@ -21,6 +21,8 @@ struct cJSON;
 
 namespace infohub {
 
+class NetworkArbiter;
+
 enum class CloudSetupStage : uint8_t {
   kIdle,
   kLoggingIn,
@@ -171,6 +173,9 @@ class BambuCloudClient {
   void set_config_store(const ConfigStore* config_store) { config_store_ = config_store; }
   void configure(BambuCloudCredentials credentials, std::string printer_serial);
   void set_network_ready(bool ready) { network_ready_.store(ready); }
+  // Shared handshake-serialization slot -- see NetworkArbiter. May be null
+  // (falls back to unconditional connect, same as before this existed).
+  void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
   // Invoked whenever a `client.connected` / `client.disconnected` event for the
   // currently-bound printer arrives on the Bambu Cloud MQTT feed. Used by the
   // local PrinterClient to reconnect immediately when the printer comes back
@@ -222,6 +227,9 @@ class BambuCloudClient {
   void apply_configuration(BambuCloudCredentials credentials, std::string printer_serial);
   void handle_mqtt_event(esp_mqtt_event_handle_t event);
   void stop_mqtt_client();
+  // No-op if no slot is currently held -- same pattern as
+  // PrinterClient::release_handshake_slot_if_held().
+  void release_handshake_slot_if_held();
   void process_pending_chamber_light_command();
   bool publish_chamber_light_command(bool on);
   void process_pending_print_command();
@@ -313,6 +321,9 @@ class BambuCloudClient {
   TaskHandle_t task_handle_ = nullptr;
   esp_mqtt_client_handle_t mqtt_client_ = nullptr;
   std::string mqtt_client_id_{};
+  NetworkArbiter* network_arbiter_ = nullptr;
+  // See PrinterClient::handshake_slot_held_ -- same async-MQTT rationale.
+  std::atomic<bool> handshake_slot_held_{false};
   std::string mqtt_report_topic_{};
   std::string mqtt_request_topic_{};
   std::string incoming_topic_{};
