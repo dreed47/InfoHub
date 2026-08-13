@@ -20,7 +20,11 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "infohub/plugins/printer/bambu_cloud_client.hpp"
 #include "infohub/plugins/printer/bambu_status.hpp"
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+#include "infohub/plugins/printer/printer_plugin.hpp"
+#endif
 #include "infohub/debug_log_buffer.hpp"
 #include "infohub/portal_shared.hpp"
 #include "infohub/time_sync.hpp"
@@ -409,224 +413,12 @@ std::string display_tilt_field_value(int deci_deg) {
 
 }  // namespace
 
-bool cloud_detail_is_transitional(const std::string& detail) {
-  const std::string normalized = normalize_bambu_status_token(detail);
-  return normalized == "LOGGING IN TO BAMBU CLOUD" ||
-         normalized == "WAITING FOR WI-FI FOR BAMBU CLOUD" ||
-         normalized == "RESTORED BAMBU CLOUD SESSION";
-}
-
-namespace {
-
-struct CloudPortalPresentation {
-  BambuCloudSnapshot snapshot{};
-  bool ready = false;
-  std::string badge_value = "Not configured";
-  const char* badge_class = "idle";
-  std::string status_line = "Connect Bambu Cloud";
-  std::string status_detail = "No cloud response yet";
-};
-
-}  // namespace
-
-bool cloud_portal_ready(const BambuCloudSnapshot& snapshot) {
-  if (!snapshot.configured || snapshot.verification_required || snapshot.tfa_required) {
-    return false;
-  }
-  if (snapshot.session_connected || snapshot.connected) {
-    return true;
-  }
-  switch (snapshot.setup_stage) {
-    case CloudSetupStage::kBindingPrinter:
-    case CloudSetupStage::kConnectingMqtt:
-    case CloudSetupStage::kConnected:
-      return true;
-    case CloudSetupStage::kIdle:
-    case CloudSetupStage::kLoggingIn:
-    case CloudSetupStage::kEmailCodeRequired:
-    case CloudSetupStage::kTfaRequired:
-    case CloudSetupStage::kCodeSubmitted:
-    case CloudSetupStage::kFailed:
-    default:
-      return false;
-  }
-}
-
-namespace {
-
-BambuCloudSnapshot portal_cloud_view(BambuCloudSnapshot snapshot) {
-  if (!cloud_portal_ready(snapshot)) {
-    return snapshot;
-  }
-
-  snapshot.connected = true;
-  snapshot.setup_stage = CloudSetupStage::kConnected;
-  if (cloud_detail_is_transitional(snapshot.detail) || snapshot.detail.empty()) {
-    snapshot.detail = "Bambu Cloud session is ready.";
-  }
-  return snapshot;
-}
-
-CloudPortalPresentation cloud_portal_presentation(const BambuCloudSnapshot& cloud) {
-  CloudPortalPresentation presentation;
-  presentation.ready = cloud_portal_ready(cloud);
-  presentation.snapshot = portal_cloud_view(cloud);
-  presentation.status_detail =
-      presentation.snapshot.detail.empty() ? "No cloud response yet" : presentation.snapshot.detail;
-
-  if (presentation.ready) {
-    presentation.badge_value = "Connected";
-    presentation.badge_class = "ok";
-    presentation.status_line = "Cloud connected";
-    return presentation;
-  }
-
-  if (presentation.snapshot.verification_required) {
-    presentation.badge_value = "Code required";
-    presentation.badge_class = "warn";
-    presentation.status_line =
-        presentation.snapshot.tfa_required ? "2FA required" : "Verification code required";
-    return presentation;
-  }
-
-  switch (presentation.snapshot.setup_stage) {
-    case CloudSetupStage::kLoggingIn:
-      presentation.badge_value = "Logging in";
-      presentation.badge_class = "info";
-      presentation.status_line = "Logging in";
-      break;
-    case CloudSetupStage::kCodeSubmitted:
-      presentation.badge_value = "Verifying code";
-      presentation.badge_class = "info";
-      presentation.status_line = "Verifying code";
-      break;
-    case CloudSetupStage::kBindingPrinter:
-      presentation.badge_value = "Binding printer";
-      presentation.badge_class = "info";
-      presentation.status_line = "Binding printer";
-      break;
-    case CloudSetupStage::kConnectingMqtt:
-      presentation.badge_value = "Connecting MQTT";
-      presentation.badge_class = "info";
-      presentation.status_line = "Connecting Cloud MQTT";
-      break;
-    case CloudSetupStage::kFailed:
-      presentation.badge_value = "Login failed";
-      presentation.badge_class = "warn";
-      presentation.status_line = "Cloud login failed";
-      break;
-    case CloudSetupStage::kConnected:
-      presentation.badge_value = "Connected";
-      presentation.badge_class = "ok";
-      presentation.status_line = "Cloud connected";
-      break;
-    case CloudSetupStage::kIdle:
-    case CloudSetupStage::kEmailCodeRequired:
-    case CloudSetupStage::kTfaRequired:
-    default:
-      break;
-  }
-
-  if (presentation.snapshot.configured && presentation.badge_value == "Not configured") {
-    presentation.badge_value = "Configured";
-    presentation.badge_class = "info";
-  }
-
-  return presentation;
-}
-
-}  // namespace
-
-void append_cloud_status_fields(std::string* body, const BambuCloudSnapshot& cloud) {
-  if (body == nullptr) {
-    return;
-  }
-
-  const CloudPortalPresentation portal = cloud_portal_presentation(cloud);
-  *body += ",\"cloud_connected\":";
-  *body += (portal.ready ? "true" : "false");
-  *body += ",\"cloud_live_connected\":";
-  *body += (cloud.connected ? "true" : "false");
-  *body += ",\"cloud_session_connected\":";
-  *body += (cloud.session_connected ? "true" : "false");
-  *body += ",\"cloud_verification_required\":";
-  *body += (portal.snapshot.verification_required ? "true" : "false");
-  *body += ",\"cloud_tfa_required\":";
-  *body += (portal.snapshot.tfa_required ? "true" : "false");
-  *body += ",\"cloud_configured\":";
-  *body += (portal.snapshot.configured ? "true" : "false");
-  *body += ",\"cloud_portal_ready\":";
-  *body += (portal.ready ? "true" : "false");
-  *body += ",\"cloud_setup_stage\":\"";
-  *body += json_escape(to_string(portal.snapshot.setup_stage));
-  *body += "\"";
-  *body += ",\"cloud_detail\":\"" + json_escape(portal.snapshot.detail) + "\"";
-  *body += ",\"cloud_resolved_serial\":\"" + json_escape(portal.snapshot.resolved_serial) + "\"";
-  *body += ",\"cloud_badge_value\":\"" + json_escape(portal.badge_value) + "\"";
-  *body += ",\"cloud_badge_state\":\"" + json_escape(portal.badge_class) + "\"";
-  *body += ",\"cloud_status_line\":\"" + json_escape(portal.status_line) + "\"";
-  *body += ",\"cloud_status_detail\":\"" + json_escape(portal.status_detail) + "\"";
-}
-
-void append_local_status_fields(std::string* body, const PrinterSnapshot& local, bool local_configured) {
-  if (body == nullptr) {
-    return;
-  }
-
-  *body += ",\"local_error\":";
-  *body += (local.connection == PrinterConnectionState::kError ? "true" : "false");
-  *body += ",\"local_connected\":";
-  *body += (local.connection == PrinterConnectionState::kOnline ? "true" : "false");
-  *body += ",\"local_configured\":";
-  *body += (local_configured ? "true" : "false");
-  *body += ",\"local_detail\":\"" + json_escape(local.detail) + "\"";
-}
-
-// Reconnect-storm telemetry — see MqttTelemetry. Emitted with stable JSON keys
-// (mqtt_local_*, mqtt_cloud_*) so the setup-portal status page can render a
-// "last attempt N s ago, M failures" line without polling internal log files.
-void append_mqtt_telemetry_fields(std::string* body, const MqttTelemetry& local,
-                                  const MqttTelemetry& cloud) {
-  if (body == nullptr) {
-    return;
-  }
-  const uint64_t current_ms = now_ms();
-  auto seconds_ago = [current_ms](uint64_t ts_ms) -> int64_t {
-    if (ts_ms == 0 || ts_ms > current_ms) {
-      return -1;
-    }
-    return static_cast<int64_t>((current_ms - ts_ms) / 1000ULL);
-  };
-  auto append = [&](const char* prefix, const MqttTelemetry& t) {
-    *body += ",\"";
-    *body += prefix;
-    *body += "_connected\":";
-    *body += (t.connected ? "true" : "false");
-    *body += ",\"";
-    *body += prefix;
-    *body += "_consecutive_failures\":" + std::to_string(t.consecutive_failures);
-    *body += ",\"";
-    *body += prefix;
-    *body += "_total_failures\":" + std::to_string(t.total_failures);
-    *body += ",\"";
-    *body += prefix;
-    *body += "_total_successes\":" + std::to_string(t.total_successes);
-    *body += ",\"";
-    *body += prefix;
-    *body += "_current_backoff_ms\":" + std::to_string(t.current_backoff_ms);
-    *body += ",\"";
-    *body += prefix;
-    *body += "_last_attempt_s_ago\":" + std::to_string(seconds_ago(t.last_attempt_ms));
-    *body += ",\"";
-    *body += prefix;
-    *body += "_last_success_s_ago\":" + std::to_string(seconds_ago(t.last_success_ms));
-    *body += ",\"";
-    *body += prefix;
-    *body += "_last_failure_s_ago\":" + std::to_string(seconds_ago(t.last_failure_ms));
-  };
-  append("mqtt_local", local);
-  append("mqtt_cloud", cloud);
-}
+// cloud_detail_is_transitional/cloud_portal_ready/cloud_portal_presentation/
+// append_cloud_status_fields/append_local_status_fields/
+// append_mqtt_telemetry_fields moved to printer_plugin_portal.cpp (Phase 2,
+// plugin-architecture extraction, see CLAUDE.md) — SetupPortal no longer
+// holds a PrinterPlugin& to source these from directly. Declared in
+// portal_shared.hpp, gated behind CONFIG_INFOHUB_PLUGIN_PRINTER.
 
 void SetupPortal::request_unlock_pin() {
   const uint64_t current_ms = now_ms();
@@ -735,6 +527,17 @@ bool SetupPortal::is_provisioning_complete() const {
   }
   return true;
 }
+
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+PrinterPlugin* SetupPortal::printer_plugin() const {
+  for (Plugin* plugin : plugins_) {
+    if (plugin != nullptr && std::string(plugin->id()) == "printer") {
+      return static_cast<PrinterPlugin*>(plugin);
+    }
+  }
+  return nullptr;
+}
+#endif
 
 void SetupPortal::prune_access_state_locked(uint64_t current_ms) {
   if (unlock_pin_expiry_ms_ != 0 && current_ms >= unlock_pin_expiry_ms_) {
@@ -955,11 +758,24 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const PrinterProfile active_profile = portal->config_store_.load_active_printer_profile();
   const PrinterConnection printer = active_profile.to_connection();
   const ArcColorScheme arc_colors = portal->config_store_.load_arc_color_scheme();
+  // Live cloud/local snapshots only exist when the printer plugin is
+  // compiled in — safe idle/empty defaults otherwise, since the rest of
+  // handle_root's hero/badge computation reads these unconditionally.
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+  PrinterPlugin* const pp = portal->printer_plugin();
   const CloudPortalPresentation cloud_portal =
-      cloud_portal_presentation(portal->printer_plugin_.cloud_refreshed_snapshot());
+      pp != nullptr ? cloud_portal_presentation(pp->cloud_refreshed_snapshot())
+                    : CloudPortalPresentation{};
   const BambuCloudSnapshot& cloud_snapshot = cloud_portal.snapshot;
-  const PrinterSnapshot local_snapshot = portal->printer_plugin_.local_snapshot();
-  const auto all_cloud_devices = portal->printer_plugin_.cloud_devices();
+  const PrinterSnapshot local_snapshot = pp != nullptr ? pp->local_snapshot() : PrinterSnapshot{};
+  const std::vector<CloudDeviceInfo> all_cloud_devices =
+      pp != nullptr ? pp->cloud_devices() : std::vector<CloudDeviceInfo>{};
+#else
+  const CloudPortalPresentation cloud_portal{};
+  const BambuCloudSnapshot cloud_snapshot{};
+  const PrinterSnapshot local_snapshot{};
+  const std::vector<CloudDeviceInfo> all_cloud_devices{};
+#endif
   const auto all_profiles = portal->config_store_.load_printer_profiles();
   const std::string effective_printer_serial = [&]() -> std::string {
     if (!printer.serial.empty()) return printer.serial;
@@ -979,7 +795,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   const bool cloud_password_saved = !cloud.password.empty();
   const bool printer_access_code_saved = !printer.access_code.empty();
   const std::string wifi_ip = portal->wifi_manager_.station_ip();
-  const bool local_configured = portal->printer_plugin_.local_configured();
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+  const bool local_configured = pp != nullptr && pp->local_configured();
+#else
+  const bool local_configured = false;
+#endif
   const bool show_connection_steps = wifi_connected && !setup_ap_active;
   const std::string wifi_password_placeholder =
       wifi_password_saved ? "Leave empty to keep saved Wi-Fi password" : "Enter Wi-Fi password";
@@ -1020,6 +840,12 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
       local_snapshot.local_connected
           ? local_badge_class
           : (cloud_snapshot.connected ? cloud_badge_class : "idle");
+  // Without the printer plugin, "setup complete" just means Wi-Fi is done —
+  // the cloud/local-configured formula below would otherwise always be
+  // false (cloud_snapshot/local_configured are the safe idle defaults from
+  // above), permanently showing the Wi-Fi/Bambu Cloud prompt even after
+  // Wi-Fi is fully configured.
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   const bool setup_fully_complete = show_connection_steps &&
       (cloud_snapshot.configured || local_configured) &&
       (!cloud_snapshot.configured || cloud_portal.ready ||
@@ -1046,6 +872,15 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           : (!wifi_configured
                  ? "Enter your home Wi-Fi, save it and let the ESP reboot."
                  : "Update Wi-Fi if needed, save, then reopen the portal on the ESP home-network IP.");
+#else
+  const bool setup_fully_complete = show_connection_steps;
+  const std::string initial_status_line = setup_fully_complete ? std::string{} : "Save Wi-Fi";
+  const std::string initial_status_detail =
+      setup_fully_complete ? std::string{}
+      : (!wifi_configured
+             ? "Enter your home Wi-Fi, save it and let the ESP reboot."
+             : "Update Wi-Fi if needed, save, then reopen the portal on the ESP home-network IP.");
+#endif
   const std::string cloud_code_label = cloud_verify_label(cloud_snapshot);
   const std::string cloud_code_placeholder = cloud_verify_placeholder(cloud_snapshot);
   const std::string cloud_code_note = cloud_verify_note(cloud_snapshot);
@@ -1294,9 +1129,11 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   html += "</p></div>";
   html += "<div class=\"badge-grid\">";
   add_badge(&html, "wifi-badge", "Wi-Fi", wifi_badge_value, wifi_badge_class);
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   if (show_connection_steps) {
     add_badge(&html, "printer-badge", "Bambu Printer", printer_group_badge_value, printer_group_badge_class);
   }
+#endif
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   if (show_connection_steps) {
     // Static placeholder — weather status is fetched and rendered client-side
@@ -1706,6 +1543,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   } // wifi_configured (Device Settings)
 
   // --- Printer plugin section ---
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   // Everything specific to the printer plugin (AMS display, sound events,
   // connection mode, printer selection, cloud/local connection) groups under
   // one collapsible block, mirroring the /api/config vs
@@ -1876,7 +1714,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
 
     const auto profiles = portal->config_store_.load_printer_profiles();
     const uint8_t active_idx = portal->config_store_.load_active_printer_index();
-    const auto cloud_devices = portal->printer_plugin_.cloud_devices();
+    const std::vector<CloudDeviceInfo> cloud_devices =
+        pp != nullptr ? pp->cloud_devices() : std::vector<CloudDeviceInfo>{};
     const std::string printer_count_str = std::to_string(profiles.size());
     const char* printer_badge_class = profiles.empty() ? "idle" : "ok";
     begin_settings_panel(
@@ -2030,6 +1869,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "</div>";
     end_collapsible_section();
   }
+#endif  // CONFIG_INFOHUB_PLUGIN_PRINTER
 
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   // --- Weather plugin section ---
@@ -2358,9 +2198,14 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "setBadge('printer-badge','Printer',printerValue,printerState);"
           "renderMqttTelemetry(body);"
           "if(Date.now()>statusLockUntil){"
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
           "if(body.wifi_connected){const setupDone=(body.cloud_configured||body.local_configured)&&(!body.cloud_configured||body.cloud_portal_ready||(!body.cloud_verification_required&&!body.cloud_tfa_required&&cloudSetupStage(body)!=='failed'))&&(!body.local_configured||!body.local_error);if(setupDone){setStatus('','',0);}else if(body.cloud_status_line){setStatus(body.cloud_status_line,body.cloud_status_detail||body.cloud_detail||body.detail||'',0);}"
           "else{const stage=cloudSetupStage(body);setStatus(trimmedValue('cloud_email')||body.cloud_connected||cloudStageIsCodeRequired(stage)||cloudStageIsBusy(stage)?'Connect Bambu Cloud':'Setup ready',body.cloud_detail||body.detail||('ESP on home network: '+(body.wifi_ip||'')),0);}}"
           "else{setStatus('Save Wi-Fi','Save Wi-Fi and restart to continue provisioning.',0);}}"
+#else
+          "if(body.wifi_connected){setStatus('','',0);}"
+          "else{setStatus('Save Wi-Fi','Save Wi-Fi and restart to continue provisioning.',0);}}"
+#endif
           "syncPortalTimer(body.portal_open_remaining_s||0);"
           "return body;}";
   html += "async function forceHealthRefresh(){try{const response=await fetch('/api/health',{cache:'no-store'});"
@@ -2845,6 +2690,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "catch(error){}finally{stocksEnabledInput.disabled=false;}});}";
 #endif
 
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   // --- Printer enabled toggle JS ---
   // Same "sync once, then let the user's own toggle win" pattern as
   // weather's station_id/poll_s fields — reused here so the periodic status
@@ -2961,6 +2807,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "body:JSON.stringify({serial:btn.dataset.serial,display_name:btn.dataset.name,model:btn.dataset.model})});"
           "if(r.ok){location.reload();}else{const body=await r.json();setStatus(body.error||'Save failed',body.detail||'',6000);btn.disabled=false;}}"
           "catch(e){setStatus('Save failed','',6000);btn.disabled=false;}});});";
+#endif  // CONFIG_INFOHUB_PLUGIN_PRINTER
 
   html += "(function(){";
   html += "var otaFile=document.getElementById('ota_file');";
@@ -3115,19 +2962,26 @@ esp_err_t SetupPortal::handle_health(httpd_req_t* request) {
   body += "\"portal\":\"setup\"";
   append_portal_access_fields(&body, access);
   if (request_authorized) {
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
     body += ",\"source_mode\":\"";
     body += to_string(portal->config_store_.load_source_mode());
-    body += "\",";
-    body += "\"wifi_connected\":";
+    body += "\"";
+#endif
+    body += ",\"wifi_connected\":";
     body += (portal->wifi_manager_.is_station_connected() ? "true" : "false");
     body += ",";
     body += "\"wifi_ip\":\"" + json_escape(portal->wifi_manager_.station_ip()) + "\"";
-    const BambuCloudSnapshot cloud = portal->printer_plugin_.cloud_refreshed_snapshot();
-    const PrinterSnapshot local = portal->printer_plugin_.local_snapshot();
-    append_cloud_status_fields(&body, cloud);
-    append_local_status_fields(&body, local, portal->printer_plugin_.local_configured());
-    append_mqtt_telemetry_fields(&body, portal->printer_plugin_.local_mqtt_telemetry(),
-                                 portal->printer_plugin_.cloud_mqtt_telemetry());
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+    PrinterPlugin* const health_pp = portal->printer_plugin();
+    if (health_pp != nullptr) {
+      const BambuCloudSnapshot cloud = health_pp->cloud_refreshed_snapshot();
+      const PrinterSnapshot local = health_pp->local_snapshot();
+      append_cloud_status_fields(&body, cloud);
+      append_local_status_fields(&body, local, health_pp->local_configured());
+      append_mqtt_telemetry_fields(&body, health_pp->local_mqtt_telemetry(),
+                                   health_pp->cloud_mqtt_telemetry());
+    }
+#endif
   }
   body += "}";
 

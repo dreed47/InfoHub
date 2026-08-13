@@ -11,12 +11,12 @@
 #include "infohub/config_store.hpp"
 #include "infohub/plugin.hpp"
 #include "infohub/pmu.hpp"
-#include "infohub/plugins/printer/printer_plugin.hpp"
 #include "infohub/wifi_manager.hpp"
 
 namespace infohub {
 
 class Ui;
+class PrinterPlugin;
 
 struct PortalAccessSnapshot {
   bool lock_enabled = true;
@@ -33,11 +33,9 @@ struct PortalAccessSnapshot {
 class SetupPortal {
  public:
   SetupPortal(ConfigStore& config_store, const WifiManager& wifi_manager,
-              PrinterPlugin& printer_plugin, Ui& ui, const PmuManager& pmu_manager,
-              AudioNotifier& audio_notifier)
+              Ui& ui, const PmuManager& pmu_manager, AudioNotifier& audio_notifier)
       : config_store_(config_store),
         wifi_manager_(wifi_manager),
-        printer_plugin_(printer_plugin),
         ui_(ui),
         pmu_manager_(pmu_manager),
         audio_notifier_(audio_notifier) {}
@@ -78,6 +76,15 @@ class SetupPortal {
 #endif
   static void ota_url_task(void* context);
   static void reboot_task(void* context);
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+  // Looks up the printer plugin from plugins_ by id, rather than holding a
+  // required PrinterPlugin& constructor dependency (Phase 2, plugin-
+  // architecture extraction, see CLAUDE.md) — SetupPortal only needs this
+  // when the plugin is actually compiled in, and even then only from
+  // handle_root/handle_health for live status display. Returns nullptr if
+  // not found (shouldn't happen when compiled in, but handlers null-check).
+  PrinterPlugin* printer_plugin() const;
+#endif
   bool is_provisioning_complete() const;
   bool is_lock_required() const;
   esp_err_t send_unlock_page(httpd_req_t* request);
@@ -88,7 +95,6 @@ class SetupPortal {
 
   ConfigStore& config_store_;
   const WifiManager& wifi_manager_;
-  PrinterPlugin& printer_plugin_;
   // Copied from start()'s param — used by is_provisioning_complete() to poll
   // every enabled plugin generically instead of hardcoding printer_plugin_.
   std::array<Plugin*, kMaxPlugins> plugins_{};

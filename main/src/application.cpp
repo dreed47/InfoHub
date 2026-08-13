@@ -75,8 +75,7 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 }  // namespace
 
 Application::Application()
-    : setup_portal_(config_store_, wifi_manager_, printer_plugin_, ui_, pmu_manager_,
-                    audio_notifier_),
+    : setup_portal_(config_store_, wifi_manager_, ui_, pmu_manager_, audio_notifier_),
       serial_provisioner_(config_store_, wifi_manager_) {
   printer_plugin_.cloud_client().set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
