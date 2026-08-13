@@ -1,10 +1,10 @@
-# PrintSphere
+# InfoHub
 
-PrintSphere is a round ESP32-S3 companion display for Bambu Lab printers. It shows print progress, temperatures, remaining time, AMS information, errors, cover previews and supported camera snapshots.
+InfoHub is a round/square ESP32-S3 info-display platform. Bambu Lab printer status is its flagship feature, but printer, weather and stocks are each an independently toggleable plugin — pick the combination you want at build time.
 
 It works directly with Bambu Cloud, the printer's local connection, or both. Home Assistant is not required.
 
-<img width="400" height="300" alt="PrintSphere AMOLED display" src="https://github.com/user-attachments/assets/820c2e9b-10a7-4430-949c-e8b0adc1357d" /> <img width="400" height="300" alt="PrintSphere interface" src="https://github.com/user-attachments/assets/5923dc59-0123-4df1-b54d-673c6dbad23b" />
+(screenshots coming soon)
 
 Latest stable version: **v1.6.2**
 
@@ -19,26 +19,38 @@ Choose the correct hardware in the installer:
 
 Firmware for one variant must not be installed on the other variant.
 
-## Install PrintSphere
+## Plugins
+
+InfoHub is built as a set of independently Kconfig-toggleable plugins, not a fixed feature set:
+
+| Plugin | Default | What it shows |
+| --- | --- | --- |
+| Printer (Bambu Lab) | On | Print progress, temperatures, AMS, camera, cover previews, controls |
+| Weather | Off | Current conditions + hourly forecast |
+| Stocks | Off | Live quotes for up to 4 tracked symbols |
+
+Enable any combination when building from source (see [Building InfoHub](docs/Build/README.md)); the pre-built installer images ship with all three enabled.
+
+## Install InfoHub
 
 You need a USB data cable and a desktop version of Chrome or Edge.
 
-1. Open the **[PrintSphere Web Installer](https://cptkirki.github.io/PrintSphere/flash/)**.
+1. Open the **[InfoHub Web Installer](https://dreed47.github.io/InfoHub/flash/)**.
 2. Select your hardware variant.
 3. Connect the device by USB and choose **Install selected firmware**.
 4. Keep the USB cable connected after installation.
-5. The installer searches for nearby Wi-Fi networks and sends your Wi-Fi details directly to PrintSphere over USB.
-6. Open Web Config using the IP address shown by PrintSphere and connect your Bambu printer.
+5. The installer searches for nearby Wi-Fi networks and sends your Wi-Fi details directly to InfoHub over USB.
+6. Open Web Config using the IP address shown by InfoHub and connect your Bambu printer.
 
 ### Wi-Fi fallback
 
 If USB Wi-Fi setup is unavailable, connect to the fallback access point:
 
-- Wi-Fi name: `PrintSphere-Setup`
-- Password: `printsphere`
+- Wi-Fi name: `InfoHub-Setup`
+- Password: `infohub123`
 - Setup page: [http://192.168.4.1](http://192.168.4.1)
 
-Select your home Wi-Fi there. After PrintSphere connects, continue through Web Config on its home-network IP address.
+Select your home Wi-Fi there. After InfoHub connects, continue through Web Config on its home-network IP address.
 
 ## Connect your printer
 
@@ -56,15 +68,15 @@ For a local connection, enter:
 - Printer serial number
 - Printer access code
 
-Cloud and local printer settings can normally be connected without restarting PrintSphere.
+Cloud and local printer settings can normally be connected without restarting InfoHub.
 
 ## Update without losing your settings
 
-Use an **OTA update** for an already configured PrintSphere. OTA keeps Wi-Fi, printer profiles and display settings.
+Use an **OTA update** for an already configured InfoHub. OTA keeps Wi-Fi, printer profiles and display settings.
 
-1. Open the [PrintSphere Web Installer](https://cptkirki.github.io/PrintSphere/flash/).
+1. Open the [InfoHub Web Installer](https://dreed47.github.io/InfoHub/flash/).
 2. Select the same hardware variant currently installed on your device.
-3. In **OTA Update**, enter the IP address shown by PrintSphere.
+3. In **OTA Update**, enter the IP address shown by InfoHub.
 4. Open the OTA updater and confirm **Flash from URL** in Web Config.
 
 You can also open Web Config directly and use its **Firmware Update** section. It accepts either a matching OTA `.bin` file or a GitHub firmware URL.
@@ -88,16 +100,17 @@ The public installer performs the initial USB flash. OTA itself runs through Web
 - Configurable sound notifications and custom WAV files
 - Secure Web Config access using a temporary PIN
 - OTA firmware updates that retain the device configuration
+- Weather and stocks plugins for non-printer use cases
 
 ## Printer and camera support
 
-PrintSphere contains status paths for:
+The printer plugin contains status paths for:
 
 `A1`, `A1 Mini`, `A2L`, `P1P`, `P1S`, `P2S`, `H2C`, `H2D`, `H2D Pro`, `H2S`, `X1`, `X1C`, `X1E`, `X2D`
 
 Local JPEG snapshots are available on `A1`, `A1 Mini`, `A2L`, `P1P` and `P1S`.
 
-`P2S`, the `H2` family, the `X1` family and `X2D` use RTSP video. The ESP32-S3 cannot decode these streams, so their live camera view is not available in PrintSphere. Cloud cover previews can still be shown.
+`P2S`, the `H2` family, the `X1` family and `X2D` use RTSP video. The ESP32-S3 cannot decode these streams, so their live camera view is not available in InfoHub. Cloud cover previews can still be shown.
 
 The `H2` family and `X2D` require Developer Mode for local printer status. Availability of individual values can differ between printer models and firmware versions.
 
@@ -115,7 +128,7 @@ Web Config includes:
 - Portal PIN protection
 - Firmware updates by file upload or URL
 
-After initial setup, Web Config can be protected with a temporary six-digit PIN. Long-press the PrintSphere display for about one second to request a PIN.
+After initial setup, Web Config can be protected with a temporary six-digit PIN. Long-press the InfoHub display for about one second to request a PIN.
 
 ## Known limitations
 
@@ -126,8 +139,7 @@ After initial setup, Web Config can be protected with a temporary six-digit PIN.
 
 ## Links
 
-- [PrintSphere Web Installer](https://cptkirki.github.io/PrintSphere/flash/)
+- [InfoHub Web Installer](https://dreed47.github.io/InfoHub/flash/)
 - [MakerWorld model](https://makerworld.com/de/models/2517189-printsphere-bambu-status-display-standalone-1-75)
-- [v1.6.2 release notes](release/RELEASE_NOTES_v1.6.2.md)
 - [Building, cloning and manual flashing](docs/Build/README.md)
 - [License](LICENSE)

@@ -1,6 +1,6 @@
 # Building InfoHub
 
-This document is for developers and advanced users who want to clone, build, flash or package InfoHub themselves. Most users should use the [InfoHub Web Installer](https://cptkirki.github.io/InfoHub/flash/).
+This document is for developers and advanced users who want to clone, build, flash or package InfoHub themselves. Most users should use the [InfoHub Web Installer](https://dreed47.github.io/InfoHub/flash/).
 
 ## Requirements
 
