@@ -5,6 +5,7 @@
 
 #include "esp_log.h"
 #include "infohub/ui.hpp"
+#include "infohub/ui_toolkit.hpp"
 
 #if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
@@ -84,8 +85,8 @@ void StocksPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
     return;
   }
 
-  if (bsp_display_lock(3000) != ESP_OK) {
-    ESP_LOGW(kTag, "LVGL lock failed building stocks screen");
+  LvglLockGuard lock(3000, "StocksPlugin::build_screen");
+  if (!lock.locked()) {
     return;
   }
 
@@ -139,8 +140,6 @@ void StocksPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
   lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(status_label_, &dosis_20, 0);
   lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
-
-  bsp_display_unlock();
 }
 
 void StocksPlugin::update_ui() {
@@ -154,7 +153,8 @@ void StocksPlugin::update_ui() {
     return;
   }
 
-  if (bsp_display_lock(200) != ESP_OK) {
+  LvglLockGuard lock(200, "StocksPlugin::update_ui");
+  if (!lock.locked()) {
     return;
   }
 
@@ -189,8 +189,6 @@ void StocksPlugin::update_ui() {
                       snapshot.last_error.empty() ? "Waiting for first fetch..."
                                                    : snapshot.last_error.c_str());
   }
-
-  bsp_display_unlock();
 }
 
 }  // namespace infohub

@@ -7,6 +7,7 @@
 #include "esp_log.h"
 #include "infohub/board_config.hpp"
 #include "infohub/ui.hpp"
+#include "infohub/ui_toolkit.hpp"
 
 #if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
 #include "bsp/esp32_s3_touch_amoled_1_75.h"
@@ -106,8 +107,8 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
     return;
   }
 
-  if (bsp_display_lock(3000) != ESP_OK) {
-    ESP_LOGW(kTag, "LVGL lock failed building weather screen");
+  LvglLockGuard lock(3000, "WeatherPlugin::build_screen");
+  if (!lock.locked()) {
     return;
   }
 
@@ -158,7 +159,6 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
       lv_obj_set_style_text_color(fc.conditions_label, lv_color_hex(0xCCCCCC), 0);
     }
 
-    bsp_display_unlock();
     return;
   }
 
@@ -204,8 +204,6 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
     lv_obj_set_style_text_font(extra_detail_label_, &dosis_20, 0);
     lv_obj_set_style_text_color(extra_detail_label_, lv_color_hex(0xCCCCCC), 0);
   }
-
-  bsp_display_unlock();
 }
 
 void WeatherPlugin::update_ui() {
@@ -219,7 +217,8 @@ void WeatherPlugin::update_ui() {
     return;
   }
 
-  if (bsp_display_lock(200) != ESP_OK) {
+  LvglLockGuard lock(200, "WeatherPlugin::update_ui");
+  if (!lock.locked()) {
     return;
   }
 
@@ -301,8 +300,6 @@ void WeatherPlugin::update_ui() {
       lv_label_set_text(fc.conditions_label, conditions_text.c_str());
     }
   }
-
-  bsp_display_unlock();
 }
 
 }  // namespace infohub
