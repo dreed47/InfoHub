@@ -69,17 +69,18 @@ class Plugin {
   // Ui::reserve_plugin_page_pool()/register_plugin_pages(). 0 (default)
   // means tile-only, no swipeable screen. Fixed per plugin type, decided
   // once at compile time — not runtime-configurable, same as kMaxAmsUnits is
-  // for the printer plugin's own (separately, non-generic) AMS pages. Every
-  // plugin gets the same mechanism: PrinterPlugin just doesn't opt in here
-  // because its pages predate this pool and stay Ui-hardcoded (see
-  // CLAUDE.md's parked Phase 6 backlog).
+  // for the printer plugin's own AMS pages. PrinterPlugin reports 8 (Phase
+  // 4a, see CLAUDE.md) so it flows through the same generic build_screen()
+  // loop as every other plugin, even though its pages are transitionally
+  // still pre-built directly by Ui::build_dashboard() rather than truly
+  // pool-allocated until Phase 4b/4c.
   virtual uint8_t page_count() const { return 0; }
 
   // UI: home-screen tile + full screen(s), LVGL objects built lazily.
   virtual void build_tile(lv_obj_t* parent) = 0;
   // Called once per reserved page (page_index in [0, page_count())) during
   // Application's boot sequence, after init(). `parent` is that page's bare
-  // LVGL container (Ui::plugin_page_container()/printer_select_page_container()).
+  // LVGL container (Ui::plugin_page_container()).
   virtual void build_screen(lv_obj_t* parent, uint8_t page_index) = 0;
   virtual void update_ui() = 0;  // pull latest state, push to widgets
 

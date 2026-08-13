@@ -456,16 +456,58 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   }
 
   set_enabled(ctx.config_store.load_plugin_string(id(), "enabled") != "0");
-  // Longer timeout than the default 200ms: this runs immediately after
-  // Ui::initialize()'s own build_dashboard() call, which can still be
-  // holding the LVGL lock for ~300ms — losing that race at boot would
-  // silently leave the pager showing printer pages regardless of the
-  // persisted disabled state (no retry exists once init() moves on).
-  ui_->set_printer_plugin_enabled(enabled(), /*lock_timeout_ms=*/2000);
+  // No explicit boot-time UI toggle needed here (unlike the pre-Phase-4b/4c
+  // Ui::set_printer_plugin_enabled() call that used to live here): the
+  // generic page pool's per-plugin enabled flag already defaults to hidden,
+  // and Application only calls update_ui() for enabled plugins — so a
+  // disabled-at-boot printer simply never gets its pages shown, and an
+  // enabled one shows them via its own first update_ui() tick (mirrors
+  // WeatherPlugin's existing pattern).
   return ESP_OK;
 }
 
-void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
+void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
+  // Application's boot-time build_screen() loop calls this directly from the
+  // main task, not the LVGL task — every LVGL API touch below needs the
+  // display lock, same as Ui::build_dashboard() used to hold for this exact
+  // construction before Phase 4b/4c moved it here. Without it, this races
+  // the LVGL render task and hits its "invalidate during rendering" assert,
+  // corrupting internal state and hanging in a subsequent invalidate call
+  // (confirmed via on-device debug instrumentation, not a theoretical risk).
+  LvglLockGuard lock(3000, "PrinterPlugin::build_screen");
+  if (!lock.locked()) {
+    return;
+  }
+  // Local index layout: 0=printer-selector, 1..kMaxAmsUnits=AMS units,
+  // kMaxAmsUnits+1=main dashboard, +2=preview, +3=camera.
+  if (page_index >= 1 && page_index <= kMaxAmsUnits) {
+    const int unit_idx = page_index - 1;
+    ams_pages_[unit_idx] = parent;
+    build_ams_page(unit_idx);
+    lv_obj_add_flag(ams_pages_[unit_idx], LV_OBJ_FLAG_HIDDEN);
+    ams_unit_present_[unit_idx] = false;
+    ui_->set_plugin_page_available(id(), page_index, &ams_unit_present_[unit_idx]);
+    return;
+  }
+  if (page_index == kMaxAmsUnits + 1) {
+    build_main_dashboard_page(parent);
+    return;
+  }
+  if (page_index == kMaxAmsUnits + 2) {
+    build_preview_page(parent);
+    ui_->set_plugin_page_available(id(), page_index, &preview_page_available_);
+    return;
+  }
+  if (page_index == kMaxAmsUnits + 3) {
+    build_camera_page(parent);
+    ui_->set_plugin_page_available(id(), page_index, &camera_page_available_);
+    // Last page this plugin builds — safe point to default to the main
+    // dashboard (historical boot behavior), not this plugin's own page 0
+    // (printer-selector), which Ui's own default (page pool index 0) would
+    // otherwise land on since printer registers first.
+    ui_->set_active_page_by_plugin(id(), kMaxAmsUnits + 1);
+    return;
+  }
   title_ = lv_label_create(parent);
   set_label_text_if_changed(title_, "Printers");
   lv_obj_set_width(title_, 320);
@@ -498,6 +540,9 @@ void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
 
   ui_->register_page0_fade_targets(title_, card_list_, empty_note_);
   ui_->register_page0_reentry_callback(&PrinterPlugin::replay_card_animations_trampoline, this);
+  ui_->register_page_visibility_callback(&PrinterPlugin::refresh_page_visibility_trampoline, this);
+  ui_->register_page_settle_callback(&PrinterPlugin::on_page_settled_trampoline, this);
+  ui_->register_page_tap_callback(&PrinterPlugin::on_page_tapped_trampoline, this);
 }
 
 void PrinterPlugin::replay_card_animations_trampoline(void* user_data) {
@@ -754,7 +799,7 @@ void PrinterPlugin::tick(uint64_t now_ms) {
     cloud_client_.configure(config_store_->load_cloud_credentials(), new_conn.serial);
     ESP_LOGI(kTag, "Switched active printer to profile %d", switch_idx);
   }
-  if (ui_->is_config_page_active()) {
+  if (ui_->is_plugin_page_active("printer", 0)) {
     const auto profiles = config_store_->load_printer_profiles();
     const uint8_t active_idx = config_store_->load_active_printer_index();
     const bool local_connected = printer_client_.snapshot().local_connected;
@@ -775,8 +820,8 @@ void PrinterPlugin::tick(uint64_t now_ms) {
   const bool wifi_connected = wifi_manager_->is_station_connected();
   const std::string wifi_ip = wifi_manager_->station_ip();
   const bool page_transition_active = ui_->is_page_transition_active();
-  const bool preview_page_active = ui_->is_page2_active();
-  const bool camera_page_active = ui_->is_camera_page_active();
+  const bool preview_page_active = ui_->is_plugin_page_active("printer", 6);
+  const bool camera_page_active = ui_->is_plugin_page_active("printer", 7);
   source_mode_ = config_store_->load_source_mode();
   const bool source_mode_changed = source_mode_ != last_source_mode_;
   const bool wifi_lost = !wifi_connected && last_wifi_connected_;
@@ -786,7 +831,7 @@ void PrinterPlugin::tick(uint64_t now_ms) {
     local_mqtt_handoff_until_tick_ = 0;
     ESP_LOGI(kTag, "Local MQTT handoff complete: local MQTT connected");
   }
-  const bool camera_page_visible = ui_->is_camera_page_visible();
+  const bool camera_page_visible = ui_->is_plugin_page_visible("printer", 7);
 
   if (source_mode_ == SourceMode::kHybrid && last_camera_page_active_ && !camera_page_visible &&
       wifi_connected) {
@@ -887,7 +932,7 @@ void PrinterPlugin::tick(uint64_t now_ms) {
       camera_page_active &&
       ui_->screen_power_mode() != ScreenPowerMode::kOff;
   camera_client_.set_enabled(camera_enabled);
-  if (ui_->consume_camera_refresh_request()) {
+  if (consume_camera_refresh_request()) {
     camera_client_.request_refresh();
   }
 
@@ -1189,13 +1234,10 @@ void PrinterPlugin::apply_ring_visual() {
   ui_->apply_ring_visual(ring, progress, text_hex);
 }
 
-void PrinterPlugin::update_ui() {
-  // Portal PIN/hint push is now core (Application calls it directly every
-  // loop iteration, independent of any plugin) — see
-  // Ui::update_portal_access_visuals().
-  ui_->apply_snapshot(latest_snapshot_);
-  apply_ring_visual();
-}
+// update_ui() itself is defined in printer_plugin_ui.cpp (needs
+// decode_preview_png(), TU-local there) — it pre-decodes the preview PNG
+// outside the LVGL lock when relevant, defers to deferred_snapshot_ if a
+// scroll is in progress, then calls apply_snapshot_locked() + apply_ring_visual().
 
 bool PrinterPlugin::wants_network() const {
   // Best-effort hint; NetworkArbiter is not wired into the connect call sites

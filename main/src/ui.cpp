@@ -10,15 +10,12 @@
 #include <string>
 
 #include "sdkconfig.h"
-#include "misc/cache/instance/lv_image_cache.h"
 #include "esp_check.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
-#include "esp_memory_utils.h"
 #include "esp_timer.h"
 #include "driver/gpio.h"
-#include "png.h"
 #include "infohub/board_config.hpp"
+#include "infohub/pmu.hpp"
 #include "infohub/ui_toolkit.hpp"
 
 #if defined(INFOHUB_HW_VARIANT_AMOLED_1_75)
@@ -30,13 +27,10 @@
 #endif
 
 extern "C" {
-extern const lv_image_dsc_t bambuicon_small;
 extern const lv_font_t dosis_20;
-extern const lv_font_t dosis_32;
 extern const lv_font_t dosis_40;
 extern const lv_font_t lv_font_montserrat_20;
 extern const lv_font_t mdi_30;
-extern const lv_font_t mdi_40;
 }
 
 namespace infohub {
@@ -44,36 +38,8 @@ namespace infohub {
 namespace {
 
 constexpr char kTag[] = "infohub.ui";
-constexpr size_t kImagePersistentReserveBytes = 20U * 1024U;
 constexpr int kDefaultBrightnessPercent = 80;
 constexpr int kRingStrokeWidth = 22;
-constexpr int kRemainingRowY = 172;
-// Page-2 preview cover layout. The compact layout (240 px cover, lifted up
-// to make room for two print-control buttons below) is only used when the
-// experimental print-control buttons are compiled in. The default build keeps
-// the original full-size cover layout (320 px, centered) to preserve the
-// look-and-feel of releases prior to v1.6-rc1.
-#if CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
-constexpr int kPage2PreviewSize = 240;
-constexpr int kPage2PreviewYOffset = -90;
-constexpr int kPage2NoteWithImageY = 56;
-constexpr int kPage2SubnoteWithImageY = 60;
-#else
-constexpr int kPage2PreviewSize = 320;
-constexpr int kPage2PreviewYOffset = -12;
-constexpr int kPage2NoteWithImageY = 138;
-constexpr int kPage2SubnoteWithImageY = 188;
-#endif
-constexpr int kPage3CameraWidth = 400;
-constexpr int kPage3CameraHeight = 224;
-constexpr int kPage3CameraYOffset = 0;
-constexpr int kPage3NoteWithImageY = 150;
-constexpr int kPage3SubnoteWithImageY = 182;
-// Status text shown above the camera JPEG when an image is loaded.
-// Image is 224 high and centered at y=0, so its top is ~y=-112; the
-// status sits above with comfortable breathing room.
-constexpr int kPage3StatusAboveImageY = -138;
-constexpr int kAuxTempRowY = 28;
 // Was 24 — raised after confirming via on-device debug logging that natural
 // hand tremor during a ~1s hold-for-PIN long-press was crossing this
 // threshold, flipping the gesture into brightness-drag mode
@@ -98,12 +64,11 @@ constexpr uint32_t kBatteryOffTimeoutActiveMs = 120000U;
 constexpr uint64_t kPortalHintIntroMs = 5ULL * 60ULL * 1000ULL;
 constexpr uint32_t kRingBaseDark = 0x101010;
 constexpr uint32_t kRingIdleSolid = 0x404040;
-constexpr char kDegreeC[] = "\xC2\xB0""C";
-constexpr char kMdiClock[] = "\xF3\xB1\x91\x8E";
-constexpr char kMdiNozzle[] = "\xF3\xB0\xB9\x9B";
-constexpr char kMdiBed[] = "\xF3\xB1\xA1\x9B";
-constexpr char kMdiSync[] = "\xF3\xB1\x9B\x87";
-constexpr char kMdiSpool[] = "\xF3\xB1\x82\x97";  // U+F1097 mdi-spool
+
+// Battery overlay glyphs (MDI font codepoints) + text formatting — core
+// (PmuManager-driven, not printer-specific), moved back here from
+// printer_plugin_ui.cpp so Application can refresh the overlay every loop
+// iteration independent of any plugin. See update_battery_overlay() below.
 constexpr char kMdiBatteryCharging0[] = "\xF3\xB0\xA0\x92";
 constexpr char kMdiBatteryCharging10[] = "\xF3\xB0\xA0\x88";
 constexpr char kMdiBatteryCharging20[] = "\xF3\xB0\xA0\x89";
@@ -127,129 +92,48 @@ constexpr char kMdiBattery80[] = "\xF3\xB0\x82\x81";
 constexpr char kMdiBattery90[] = "\xF3\xB0\x82\x82";
 constexpr char kMdiBattery100[] = "\xF3\xB0\x81\xB9";
 
-class LvglLockGuard {
- public:
-  explicit LvglLockGuard(uint32_t timeout_ms, const char* caller = "?")
-      : caller_(caller) {
-    const uint32_t before = esp_log_timestamp();
-    locked_ = bsp_display_lock(timeout_ms) == ESP_OK;
-    const uint32_t wait_ms = esp_log_timestamp() - before;
-    if (!locked_) {
-      ESP_LOGW(kTag, "LVGL lock FAILED after %lums (timeout=%lu, caller=%s) "
-               "heap_int=%lu heap_dma=%lu",
-               (unsigned long)wait_ms, (unsigned long)timeout_ms, caller_,
-               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-               (unsigned long)heap_caps_get_free_size(MALLOC_CAP_DMA));
-      lock_fail_count_++;
-      if (lock_fail_count_ >= 5 && (lock_fail_count_ % 10) == 0) {
-        ESP_LOGE(kTag, "LVGL lock failed %lu times consecutively — worker task may be stuck",
-                 (unsigned long)lock_fail_count_);
-      }
-    } else {
-      acquire_seq_ = ++total_acquires_;
-      previous_active_ = active_;
-      active_ = this;
-      if (lock_fail_count_ > 0) {
-        ESP_LOGI(kTag, "LVGL lock recovered after %lu failures (wait=%lums, caller=%s)",
-                 (unsigned long)lock_fail_count_, (unsigned long)wait_ms, caller_);
-      }
-      lock_fail_count_ = 0;
-      if (wait_ms > 150) {
-        ESP_LOGW(kTag, "LVGL lock waited %lums (caller=%s)",
-                 (unsigned long)wait_ms, caller_);
-      }
-    }
-    acquired_ts_ = esp_log_timestamp();
+const char* mdi_battery_symbol(const PowerSnapshot& power) {
+  if (!power.usb_present && power.battery_percent == 0U && !power.charging) {
+    return kMdiBatteryAlert;
   }
 
-  ~LvglLockGuard() {
-    if (locked_) {
-      const uint32_t held_ms = esp_log_timestamp() - acquired_ts_;
-      const char* last_phase = phase_;
-      const uint32_t since_phase = phase_ts_ != 0 ? (esp_log_timestamp() - phase_ts_) : 0;
-      active_ = previous_active_;
-      bsp_display_unlock();
-      if (held_ms > 80) {
-        ESP_LOGW(kTag,
-                 "LVGL lock held %lums (caller=%s seq=%lu phase=%s phase_ms=%lu)",
-                 (unsigned long)held_ms, caller_, (unsigned long)acquire_seq_,
-                 last_phase != nullptr ? last_phase : "-",
-                 (unsigned long)since_phase);
-      }
-    }
+  if (power.charging) {
+    if (power.battery_percent >= 95U) return kMdiBatteryCharging100;
+    if (power.battery_percent >= 85U) return kMdiBatteryCharging90;
+    if (power.battery_percent >= 75U) return kMdiBatteryCharging80;
+    if (power.battery_percent >= 65U) return kMdiBatteryCharging70;
+    if (power.battery_percent >= 55U) return kMdiBatteryCharging60;
+    if (power.battery_percent >= 45U) return kMdiBatteryCharging50;
+    if (power.battery_percent >= 35U) return kMdiBatteryCharging40;
+    if (power.battery_percent >= 25U) return kMdiBatteryCharging30;
+    if (power.battery_percent >= 15U) return kMdiBatteryCharging20;
+    if (power.battery_percent >= 5U) return kMdiBatteryCharging10;
+    return kMdiBatteryCharging0;
   }
 
-  void mark_phase(const char* phase) {
-    phase_ = phase;
-    phase_ts_ = esp_log_timestamp();
-  }
-
-  // Annotate the currently active guard from anywhere underneath it.
-  static void note_phase(const char* phase) {
-    if (active_ != nullptr) {
-      active_->mark_phase(phase);
-    }
-  }
-
-  bool locked() const { return locked_; }
-
-  static uint32_t lock_fail_count_;
-  static uint32_t total_acquires_;
-
- private:
-  const char* caller_ = "?";
-  const char* phase_ = nullptr;
-  uint32_t acquired_ts_ = 0;
-  uint32_t phase_ts_ = 0;
-  uint32_t acquire_seq_ = 0;
-  bool locked_ = false;
-  LvglLockGuard* previous_active_ = nullptr;
-
-  static thread_local LvglLockGuard* active_;
-};
-
-uint32_t LvglLockGuard::lock_fail_count_ = 0;
-uint32_t LvglLockGuard::total_acquires_ = 0;
-thread_local LvglLockGuard* LvglLockGuard::active_ = nullptr;
-
-const char* ram_region(const void* ptr) {
-  if (ptr == nullptr) {
-    return "null";
-  }
-#if defined(CONFIG_SPIRAM) && CONFIG_SPIRAM
-  return esp_ptr_external_ram(ptr) ? "psram" : "internal";
-#else
-  return "internal";
-#endif
+  if (power.battery_percent >= 95U) return kMdiBattery100;
+  if (power.battery_percent >= 85U) return kMdiBattery90;
+  if (power.battery_percent >= 75U) return kMdiBattery80;
+  if (power.battery_percent >= 65U) return kMdiBattery70;
+  if (power.battery_percent >= 55U) return kMdiBattery60;
+  if (power.battery_percent >= 45U) return kMdiBattery50;
+  if (power.battery_percent >= 35U) return kMdiBattery40;
+  if (power.battery_percent >= 25U) return kMdiBattery30;
+  if (power.battery_percent >= 15U) return kMdiBattery20;
+  return kMdiBattery10;
 }
 
-size_t allocated_size(const void* ptr) {
-  return ptr == nullptr ? 0U : heap_caps_get_allocated_size(const_cast<void*>(ptr));
+std::string battery_icon_text(const PowerSnapshot& power) {
+  return mdi_battery_symbol(power);
 }
 
-void log_heap_diag(const char* context) {
-  ESP_LOGV(kTag,
-           "[RAM] %s: int_free=%u int_largest=%u dma_free=%u dma_largest=%u "
-           "psram_free=%u psram_largest=%u",
-           context != nullptr ? context : "-",
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)),
-           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-           static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)));
-}
-
-void log_blob_diag(const char* context, const std::shared_ptr<std::vector<uint8_t>>& blob) {
-  const void* data = blob && !blob->empty() ? blob->data() : nullptr;
-  ESP_LOGV(kTag,
-           "[RAM] %s: size=%u capacity=%u alloc=%u ram=%s data=%p",
-           context != nullptr ? context : "-",
-           static_cast<unsigned>(blob ? blob->size() : 0U),
-           static_cast<unsigned>(blob ? blob->capacity() : 0U),
-           static_cast<unsigned>(allocated_size(data)),
-           ram_region(data), data);
-  log_heap_diag(context);
+std::string battery_pct_text(const PowerSnapshot& power) {
+  if (!power.usb_present && power.battery_percent == 0U && !power.charging) {
+    return "--%";
+  }
+  char buffer[8] = {};
+  std::snprintf(buffer, sizeof(buffer), "%u%%", power.battery_percent);
+  return buffer;
 }
 
 bsp_display_rotation_t bsp_rotation_for(DisplayRotation rotation) {
@@ -322,102 +206,6 @@ void apply_touch_rotation_flags(DisplayRotation rotation, bsp_display_cfg_t* cfg
 #endif
 }
 
-void set_clickable(lv_obj_t* obj, bool clickable) {
-  if (obj == nullptr) {
-    return;
-  }
-
-  const bool currently_clickable = lv_obj_has_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-  if (currently_clickable == clickable) {
-    return;
-  }
-
-  if (clickable) {
-    lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-  } else {
-    lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE);
-  }
-}
-
-// Draw callback for the green/red triangle slot indicator.
-// The triangle is an upward-pointing isosceles triangle centered in the object.
-// The bg_color style controls the triangle color; the bg_opa style controls
-// the triangle opacity (used for the pulse animation when an HMS error is
-// flagged on the slot).
-void ams_arrow_draw_cb(lv_event_t* e) {
-  auto* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
-  lv_layer_t* layer = lv_event_get_layer(e);
-  if (obj == nullptr || layer == nullptr) return;
-
-  lv_area_t coords;
-  lv_obj_get_coords(obj, &coords);
-  const int32_t w = coords.x2 - coords.x1;
-  const int32_t cx = coords.x1 + w / 2;
-
-  const lv_color_t color = lv_obj_get_style_bg_color(obj, LV_PART_MAIN);
-
-  lv_draw_triangle_dsc_t dsc;
-  lv_draw_triangle_dsc_init(&dsc);
-  dsc.p[0] = {cx, coords.y1};               // top center (tip)
-  dsc.p[1] = {coords.x1, coords.y2};        // bottom left
-  dsc.p[2] = {coords.x1 + w, coords.y2};   // bottom right
-  dsc.color = color;
-  dsc.opa = LV_OPA_COVER;
-  lv_draw_triangle(layer, &dsc);
-}
-
-// Draw callback that overlays a rhombus (diamond stripe) pattern on the
-// AMS pill rect when an HMS/Error code is mapped to that slot. Activated by
-// setting the user-data flag pointer to a `bool*` that evaluates to true.
-void ams_pill_error_overlay_cb(lv_event_t* e) {
-  auto* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
-  lv_layer_t* layer = lv_event_get_layer(e);
-  if (obj == nullptr || layer == nullptr) return;
-  const bool* flag = static_cast<const bool*>(lv_event_get_user_data(e));
-  if (flag == nullptr || !*flag) return;
-
-  lv_area_t coords;
-  lv_obj_get_coords(obj, &coords);
-  const int32_t x1 = coords.x1;
-  const int32_t y1 = coords.y1;
-  const int32_t x2 = coords.x2;
-  const int32_t y2 = coords.y2;
-  const int32_t w = x2 - x1;
-  const int32_t h = y2 - y1;
-
-  // Draw a diagonal stripe pattern (two crossing line sets = rhombus grid).
-  lv_draw_line_dsc_t line;
-  lv_draw_line_dsc_init(&line);
-  line.color = lv_color_hex(0xFFFFFF);
-  line.opa = LV_OPA_50;
-  line.width = 2;
-  const int32_t spacing = 12;
-  // Forward diagonals
-  for (int32_t k = -h; k < w; k += spacing) {
-    int32_t a_x = x1 + k;
-    int32_t a_y = y1;
-    int32_t b_x = x1 + k + h;
-    int32_t b_y = y2;
-    if (a_x < x1) { a_y += (x1 - a_x); a_x = x1; }
-    if (b_x > x2) { b_y -= (b_x - x2); b_x = x2; }
-    line.p1 = {a_x, a_y};
-    line.p2 = {b_x, b_y};
-    lv_draw_line(layer, &line);
-  }
-  // Backward diagonals
-  for (int32_t k = 0; k < w + h; k += spacing) {
-    int32_t a_x = x1 + k;
-    int32_t a_y = y1;
-    int32_t b_x = x1 + k - h;
-    int32_t b_y = y2;
-    if (a_x > x2) { a_y += (a_x - x2); a_x = x2; }
-    if (b_x < x1) { b_y -= (x1 - b_x); b_x = x1; }
-    line.p1 = {a_x, a_y};
-    line.p2 = {b_x, b_y};
-    lv_draw_line(layer, &line);
-  }
-}
-
 int display_rotation_visual_offset_x(DisplayRotation rotation) {
   switch (rotation) {
     case DisplayRotation::k90:
@@ -478,82 +266,6 @@ void apply_display_rotation_tilt_correction(lv_obj_t* screen, DisplayRotation ro
   lv_obj_set_style_transform_rotation(screen, display_rotation_tilt_correction_decideg(rotation, base_deci_deg), 0);
 }
 
-std::string optional_temperature_text(const char* label, float temperature_c, bool known = false) {
-  if (label == nullptr || (!known && temperature_c <= 0.0f)) {
-    return {};
-  }
-
-  char buffer[40] = {};
-  std::snprintf(buffer, sizeof(buffer), "%s %.0f%s", label, temperature_c, kDegreeC);
-  return buffer;
-}
-
-bool decode_preview_png(const std::shared_ptr<std::vector<uint8_t>>& encoded_blob,
-                        std::shared_ptr<std::vector<uint8_t>>* decoded_blob,
-                        lv_image_dsc_t* image_dsc) {
-  if (!encoded_blob || encoded_blob->empty() || decoded_blob == nullptr || image_dsc == nullptr) {
-    return false;
-  }
-
-  png_image image;
-  std::memset(&image, 0, sizeof(image));
-  image.version = PNG_IMAGE_VERSION;
-
-  if (!png_image_begin_read_from_memory(&image, encoded_blob->data(), encoded_blob->size())) {
-    ESP_LOGW(kTag, "Preview PNG header decode failed");
-    return false;
-  }
-
-  image.format = PNG_FORMAT_BGRA;
-  const size_t row_stride = static_cast<size_t>(image.width) * 4U;
-  const size_t decoded_size = PNG_IMAGE_SIZE(image);
-  auto raw = std::make_shared<std::vector<uint8_t>>();
-  raw->reserve(std::max(decoded_size, kImagePersistentReserveBytes));
-  raw->resize(decoded_size);
-
-  const bool ok = png_image_finish_read(&image, nullptr, raw->data(),
-                                        static_cast<png_int_32>(row_stride), nullptr) != 0;
-  if (!ok) {
-    ESP_LOGW(kTag, "Preview PNG decode failed: %s", image.message);
-    png_image_free(&image);
-    return false;
-  }
-
-  png_image_free(&image);
-
-  std::memset(image_dsc, 0, sizeof(*image_dsc));
-  image_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-  image_dsc->header.cf = LV_COLOR_FORMAT_ARGB8888;
-  image_dsc->header.flags = 0;
-  image_dsc->header.w = static_cast<uint16_t>(image.width);
-  image_dsc->header.h = static_cast<uint16_t>(image.height);
-  image_dsc->header.stride = static_cast<uint16_t>(row_stride);
-  image_dsc->data_size = static_cast<uint32_t>(raw->size());
-  image_dsc->data = raw->data();
-  log_blob_diag("ui preview encoded png", encoded_blob);
-  log_blob_diag("ui preview decoded raw", raw);
-  *decoded_blob = std::move(raw);
-  return true;
-}
-
-bool configure_camera_rgb565(const std::shared_ptr<std::vector<uint8_t>>& decoded_blob,
-                             uint16_t width, uint16_t height, lv_image_dsc_t* image_dsc) {
-  if (!decoded_blob || decoded_blob->empty() || image_dsc == nullptr || width == 0U || height == 0U) {
-    return false;
-  }
-
-  std::memset(image_dsc, 0, sizeof(*image_dsc));
-  image_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-  image_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
-  image_dsc->header.flags = 0;
-  image_dsc->header.w = width;
-  image_dsc->header.h = height;
-  image_dsc->header.stride = static_cast<uint16_t>(width * sizeof(uint16_t));
-  image_dsc->data_size = static_cast<uint32_t>(decoded_blob->size());
-  image_dsc->data = decoded_blob->data();
-  return true;
-}
-
 uint32_t scale_color(uint32_t color, uint16_t scale_0_to_255) {
   const uint8_t r = static_cast<uint8_t>((color >> 16) & 0xFF);
   const uint8_t g = static_cast<uint8_t>((color >> 8) & 0xFF);
@@ -567,393 +279,6 @@ uint32_t scale_color(uint32_t color, uint16_t scale_0_to_255) {
   return (static_cast<uint32_t>(sr) << 16) | (static_cast<uint32_t>(sg) << 8) | sb;
 }
 
-uint32_t hash_mix(uint32_t hash, uint32_t value) {
-  hash ^= value + 0x9E3779B9U + (hash << 6) + (hash >> 2);
-  return hash;
-}
-
-uint32_t hash_string(uint32_t hash, const std::string& value) {
-  for (char ch : value) {
-    hash = hash_mix(hash, static_cast<uint8_t>(ch));
-  }
-  return hash_mix(hash, static_cast<uint32_t>(value.size()));
-}
-
-uint32_t ams_ui_signature(const PrinterSnapshot& snapshot) {
-  uint32_t hash = 2166136261U;
-  hash = hash_mix(hash, snapshot.tray_now < 0 ? 0xFFFFFFFFU : static_cast<uint32_t>(snapshot.tray_now));
-  hash = hash_mix(hash, snapshot.tray_tar < 0 ? 0xFFFFFFFFU : static_cast<uint32_t>(snapshot.tray_tar));
-  if (!snapshot.ams) {
-    return hash_mix(hash, 0);
-  }
-
-  hash = hash_mix(hash, snapshot.ams->count);
-  if (snapshot.ams->count == 0) {
-    return hash;
-  }
-
-  for (uint8_t u = 0; u < snapshot.ams->count && u < kMaxAmsUnits; ++u) {
-    const AmsUnitInfo& unit = snapshot.ams->units[u];
-    hash = hash_mix(hash, unit.humidity_pct < 0 ? 0xFFFFFFFFU : static_cast<uint32_t>(unit.humidity_pct));
-    hash = hash_mix(hash, static_cast<uint32_t>(std::lround(unit.temperature_c * 10.0f)));
-    for (int i = 0; i < kMaxAmsTrays; ++i) {
-      const AmsTrayInfo& tray = unit.trays[i];
-      hash = hash_mix(hash, tray.present ? 1U : 0U);
-      hash = hash_mix(hash, tray.active ? 1U : 0U);
-      hash = hash_mix(hash, tray.color_rgba);
-      hash = hash_mix(hash, tray.remain_pct < 0 ? 0xFFFFFFFFU : static_cast<uint32_t>(tray.remain_pct));
-      hash = hash_string(hash, tray.material_type);
-    }
-  }
-
-  const AmsTrayInfo& ext = snapshot.ams->external_spool;
-  hash = hash_mix(hash, ext.present ? 1U : 0U);
-  hash = hash_mix(hash, ext.active ? 1U : 0U);
-  hash = hash_mix(hash, ext.color_rgba);
-  hash = hash_mix(hash, ext.remain_pct < 0 ? 0xFFFFFFFFU : static_cast<uint32_t>(ext.remain_pct));
-  hash = hash_string(hash, ext.material_type);
-
-  // Fold HMS codes (subset relevant to AMS) into the signature so the error
-  // overlay updates when codes appear/disappear.
-  for (uint64_t code : snapshot.hms_codes) {
-    const uint32_t attr = static_cast<uint32_t>(code >> 32);
-    if (((attr >> 24) & 0xFFU) == 0x07U) {
-      hash = hash_mix(hash, static_cast<uint32_t>(code & 0xFFFFFFFFU));
-      hash = hash_mix(hash, attr);
-    }
-  }
-  return hash;
-}
-
-// ring_visual_is_animated() removed — animation state is now tracked
-// via active_ring_anim_kind_ in apply_ring_visual_locked().
-
-std::string lifecycle_label(const PrinterSnapshot& snapshot) {
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    return "setup";
-  }
-  if (snapshot.connection == PrinterConnectionState::kConnecting && !snapshot.wifi_connected) {
-    return "syncing";
-  }
-  // Let filament ui_status (loading/unloading) take priority over has_error,
-  // because Bambu sends user-prompt error codes during filament changes.
-  if (snapshot.ui_status == "loading" || snapshot.ui_status == "unloading") {
-    return snapshot.ui_status;
-  }
-  if (snapshot.connection == PrinterConnectionState::kError || snapshot.has_error ||
-      snapshot.lifecycle == PrintLifecycleState::kError) {
-    return "failed";
-  }
-  if (snapshot.connection == PrinterConnectionState::kBooting) {
-    return "booting";
-  }
-  if (snapshot.connection == PrinterConnectionState::kReadyForLanConnect) {
-    return "ready";
-  }
-  if (!snapshot.ui_status.empty()) {
-    return snapshot.ui_status;
-  }
-
-  switch (snapshot.lifecycle) {
-    case PrintLifecycleState::kPreparing:
-      return "preparing";
-    case PrintLifecycleState::kPrinting:
-      return "printing";
-    case PrintLifecycleState::kPaused:
-      return "paused";
-    case PrintLifecycleState::kFinished:
-      return "done";
-    case PrintLifecycleState::kIdle:
-      return "idle";
-    case PrintLifecycleState::kUnknown:
-    default:
-      return snapshot.wifi_connected ? "waiting..." : "offline";
-  }
-}
-
-std::string setup_access_text(const PrinterSnapshot& snapshot) {
-  std::string text;
-  if (!snapshot.setup_ap_ssid.empty()) {
-    text = "AP: " + snapshot.setup_ap_ssid;
-  }
-  if (!snapshot.setup_ap_password.empty()) {
-    if (!text.empty()) {
-      text += "\n";
-    }
-    text += "PW: " + snapshot.setup_ap_password;
-  }
-
-  const std::string ip = snapshot.setup_ap_ip.empty() ? "192.168.4.1" : snapshot.setup_ap_ip;
-  if (!ip.empty()) {
-    if (!text.empty()) {
-      text += "\n";
-    }
-    text += "Open " + ip;
-  }
-
-  return text;
-}
-
-std::string station_portal_text(const PrinterSnapshot& snapshot) {
-  if (!snapshot.wifi_ip.empty()) {
-    return "Open " + snapshot.wifi_ip;
-  }
-  return "Open the portal on your Wi-Fi IP";
-}
-
-std::string detail_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    if (snapshot.setup_ap_active) {
-      return setup_access_text(snapshot);
-    }
-    if (snapshot.wifi_connected) {
-      return station_portal_text(snapshot);
-    }
-    return {};
-  }
-  if (!snapshot.wifi_connected) {
-    if (snapshot.setup_ap_active) {
-      return setup_access_text(snapshot);
-    }
-    return {};
-  }
-  if (snapshot.has_error && !snapshot.detail.empty()) {
-    return snapshot.detail;
-  }
-  // HMS warnings (codes present but `has_error` not flagged) should also win
-  // over the job name so the user sees the full TSV-resolved message — e.g.
-  // "MQTT Command verification failed..." after using a print-control button —
-  // instead of just the filename of the running job.
-  if ((!snapshot.hms_codes.empty() || snapshot.hms_alert_count > 0) &&
-      !snapshot.detail.empty() && snapshot.detail != snapshot.stage) {
-    return snapshot.detail;
-  }
-  if (!snapshot.job_name.empty() &&
-      (snapshot.lifecycle == PrintLifecycleState::kPreparing ||
-       snapshot.lifecycle == PrintLifecycleState::kPrinting ||
-       snapshot.lifecycle == PrintLifecycleState::kPaused)) {
-    return snapshot.job_name;
-  }
-  if (!snapshot.detail.empty() && snapshot.detail != snapshot.stage &&
-      snapshot.detail != "Connected to local Bambu MQTT" &&
-      snapshot.detail != "Printer version info received" &&
-      snapshot.detail != "Status payload received") {
-    return snapshot.detail;
-  }
-  return {};
-}
-
-std::string layer_text(const PrinterSnapshot& snapshot) {
-  char buffer[32] = {};
-  if (snapshot.total_layers > 0) {
-    std::snprintf(buffer, sizeof(buffer), "Layer: %u / %u", snapshot.current_layer,
-                  snapshot.total_layers);
-  } else if (snapshot.current_layer > 0) {
-    std::snprintf(buffer, sizeof(buffer), "Layer: %u / --", snapshot.current_layer);
-  } else {
-    std::snprintf(buffer, sizeof(buffer), "Layer: -- / --");
-  }
-  return std::string(buffer);
-}
-
-// Format the slicer filament weight estimate as a compact "14g" / "1.45kg"
-// string. Returned empty when no estimate is available so the caller can
-// hide the dedicated icon + value labels in the layer row.
-// NOTE: The tilde '~' character is intentionally omitted — the embedded
-// dosis_32 font does not include U+007E (tilde) so it would render as a
-// blank tofu rectangle.
-std::string filament_estimate_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.estimated_filament_weight_g <= 0.0f) {
-    return {};
-  }
-  char fila[24] = {};
-  if (snapshot.estimated_filament_weight_g >= 1000.0f) {
-    std::snprintf(fila, sizeof(fila), "%.2fkg",
-                  snapshot.estimated_filament_weight_g / 1000.0f);
-  } else {
-    std::snprintf(fila, sizeof(fila), "%.0fg",
-                  snapshot.estimated_filament_weight_g);
-  }
-  return std::string(fila);
-}
-
-std::string remaining_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.ui_status == "done" || snapshot.lifecycle == PrintLifecycleState::kFinished) {
-    return "Done";
-  }
-  if (snapshot.remaining_seconds == 0) {
-    return "--m";
-  }
-
-  const uint32_t minutes_total = snapshot.remaining_seconds / 60U;
-  const uint32_t hours = minutes_total / 60U;
-  const uint32_t minutes = minutes_total % 60U;
-  char buffer[24] = {};
-  if (hours > 0U) {
-    std::snprintf(buffer, sizeof(buffer), "%uh %um", static_cast<unsigned int>(hours),
-                  static_cast<unsigned int>(minutes));
-  } else {
-    std::snprintf(buffer, sizeof(buffer), "%um", static_cast<unsigned int>(minutes));
-  }
-  return buffer;
-}
-
-// Wall-clock predicted finish time as "HH:MM". Falls back to the regular
-// remaining-duration text when SNTP has not synced yet (year < 2024) or
-// when no remaining time is reported.
-std::string eta_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.ui_status == "done" || snapshot.lifecycle == PrintLifecycleState::kFinished) {
-    return "Done";
-  }
-  if (snapshot.remaining_seconds == 0) {
-    return "--:--";
-  }
-  const std::time_t now = std::time(nullptr);
-  if (now < 1700000000) {
-    // Wall clock not yet synced — fall back to duration so the row stays useful.
-    return remaining_text(snapshot);
-  }
-  const std::time_t finish = now + static_cast<std::time_t>(snapshot.remaining_seconds);
-  std::tm local{};
-  if (localtime_r(&finish, &local) == nullptr) {
-    return remaining_text(snapshot);
-  }
-  char buffer[8] = {};
-  std::snprintf(buffer, sizeof(buffer), "%02d:%02d", local.tm_hour, local.tm_min);
-  return buffer;
-}
-
-std::string preview_note_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.preview_blob && !snapshot.preview_blob->empty()) {
-    return {};  // note hidden when cover is loaded — title takes over
-  }
-  if (!snapshot.preview_url.empty()) {
-    return "Loading cloud cover";
-  }
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    return "Set up printer";
-  }
-  if (!snapshot.wifi_connected) {
-    return "Printer offline";
-  }
-  if (!snapshot.cloud_detail.empty() && !snapshot.cloud_connected) {
-    return "Connecting to cloud";
-  }
-
-  switch (snapshot.lifecycle) {
-    case PrintLifecycleState::kPreparing:
-    case PrintLifecycleState::kPrinting:
-    case PrintLifecycleState::kPaused:
-      return "Preparing cover";
-    case PrintLifecycleState::kFinished:
-      return "Last print done";
-    case PrintLifecycleState::kError:
-      return "Cover unavailable";
-    case PrintLifecycleState::kIdle:
-    case PrintLifecycleState::kUnknown:
-    default:
-      return "No active print";
-  }
-}
-
-std::string preview_subnote_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.print_active && !snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  if (!snapshot.preview_title.empty()) {
-    return snapshot.preview_title;
-  }
-  if (!snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  if (!snapshot.cloud_detail.empty()) {
-    return snapshot.cloud_detail;
-  }
-  return snapshot.preview_hint;
-}
-
-std::string camera_note_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty()) {
-    // The camera header shares its position with the global battery overlay.
-    // Prefer the battery state whenever a battery is installed (including
-    // charging); on USB-only power the header instead shows the print status.
-    return (snapshot.battery_present || snapshot.charging) ? std::string{} : lifecycle_label(snapshot);
-  }
-  if (snapshot.connection == PrinterConnectionState::kWaitingForCredentials) {
-    return "Set up printer";
-  }
-  if (!snapshot.wifi_connected) {
-    return "Camera offline";
-  }
-  if (!snapshot.camera_detail.empty()) {
-    return snapshot.camera_detail;
-  }
-  return "Tap for new image";
-}
-
-std::string camera_subnote_text(const PrinterSnapshot& snapshot) {
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty()) {
-    // Image is loaded: show layer progress below the snapshot so the cam page
-    // carries the print-in-progress info that the dashboard usually owns.
-    if (snapshot.total_layers > 0 || snapshot.current_layer > 0) {
-      return layer_text(snapshot);
-    }
-    if (!snapshot.job_name.empty()) {
-      return snapshot.job_name;
-    }
-    return {};
-  }
-  if (!snapshot.job_name.empty()) {
-    return snapshot.job_name;
-  }
-  return "Auto-refresh every 2s";
-}
-
-const char* mdi_battery_symbol(const PrinterSnapshot& snapshot) {
-  if (!snapshot.usb_present && snapshot.battery_percent == 0U && !snapshot.charging) {
-    return kMdiBatteryAlert;
-  }
-
-  if (snapshot.charging) {
-    if (snapshot.battery_percent >= 95U) return kMdiBatteryCharging100;
-    if (snapshot.battery_percent >= 85U) return kMdiBatteryCharging90;
-    if (snapshot.battery_percent >= 75U) return kMdiBatteryCharging80;
-    if (snapshot.battery_percent >= 65U) return kMdiBatteryCharging70;
-    if (snapshot.battery_percent >= 55U) return kMdiBatteryCharging60;
-    if (snapshot.battery_percent >= 45U) return kMdiBatteryCharging50;
-    if (snapshot.battery_percent >= 35U) return kMdiBatteryCharging40;
-    if (snapshot.battery_percent >= 25U) return kMdiBatteryCharging30;
-    if (snapshot.battery_percent >= 15U) return kMdiBatteryCharging20;
-    if (snapshot.battery_percent >= 5U) return kMdiBatteryCharging10;
-    return kMdiBatteryCharging0;
-  }
-
-  if (snapshot.battery_percent >= 95U) return kMdiBattery100;
-  if (snapshot.battery_percent >= 85U) return kMdiBattery90;
-  if (snapshot.battery_percent >= 75U) return kMdiBattery80;
-  if (snapshot.battery_percent >= 65U) return kMdiBattery70;
-  if (snapshot.battery_percent >= 55U) return kMdiBattery60;
-  if (snapshot.battery_percent >= 45U) return kMdiBattery50;
-  if (snapshot.battery_percent >= 35U) return kMdiBattery40;
-  if (snapshot.battery_percent >= 25U) return kMdiBattery30;
-  if (snapshot.battery_percent >= 15U) return kMdiBattery20;
-  return kMdiBattery10;
-}
-
-std::string battery_icon_text(const PrinterSnapshot& snapshot) {
-  return mdi_battery_symbol(snapshot);
-}
-
-std::string battery_pct_text(const PrinterSnapshot& snapshot) {
-  if (!snapshot.usb_present && snapshot.battery_percent == 0U && !snapshot.charging) {
-    return "--%";
-  }
-
-  char buffer[8] = {};
-  std::snprintf(buffer, sizeof(buffer), "%u%%", snapshot.battery_percent);
-  return buffer;
-}
-
 std::string short_duration_text(uint32_t total_seconds) {
   const uint32_t minutes = total_seconds / 60U;
   const uint32_t seconds = total_seconds % 60U;
@@ -965,24 +290,6 @@ std::string short_duration_text(uint32_t total_seconds) {
     std::snprintf(buffer, sizeof(buffer), "%us", static_cast<unsigned int>(seconds));
   }
   return buffer;
-}
-
-bool should_show_logo(const PrinterSnapshot& snapshot) {
-  if (!snapshot.wifi_connected) {
-    return false;
-  }
-
-  switch (snapshot.connection) {
-    case PrinterConnectionState::kBooting:
-    case PrinterConnectionState::kWaitingForCredentials:
-    case PrinterConnectionState::kConnecting:
-      return false;
-    case PrinterConnectionState::kReadyForLanConnect:
-    case PrinterConnectionState::kOnline:
-    case PrinterConnectionState::kError:
-    default:
-      return true;
-  }
 }
 
 }  // namespace
@@ -1106,20 +413,14 @@ void Ui::set_arc_color_scheme(const ArcColorScheme& colors) {
   arc_colors_ = colors;
 }
 
-bool Ui::consume_camera_refresh_request() {
-  std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-  const bool requested = camera_refresh_requested_;
-  camera_refresh_requested_ = false;
-  return requested;
-}
-
 bool Ui::consume_chamber_light_toggle_request() {
   return chamber_light_toggle_requested_.exchange(false);
 }
 
 PrintCommand Ui::consume_print_command_request() {
-  const uint8_t value =
-      print_command_request_.exchange(static_cast<uint8_t>(PrintCommand::kNone));
+  // 0 == PrintCommand::kNone — see has_print_command_request()'s comment on
+  // why this stays a bare literal instead of the enumerator name.
+  const uint8_t value = print_command_request_.exchange(0);
   return static_cast<PrintCommand>(value);
 }
 
@@ -1268,11 +569,22 @@ void Ui::apply_page0_parallax(bool force) {
   // fixed_overlay_/status_arc_ and progress_label_ live on screen_/
   // lv_layer_top() respectively — not inside any pager page — so they're not
   // naturally clipped per-page like page content is. This parallax fade only
-  // knows about the page0<->page1 boundary; every page past page0 (including
-  // the generic plugin page) would otherwise inherit whatever state this
-  // left them in. Plugin pages are printer-agnostic by design, so force both
+  // knows about the page0<->page1 boundary within the printer plugin's own
+  // pages; any OTHER plugin's page (weather/stocks/...) should force both
   // hidden while settled there, on top of the normal scroll-based fade.
-  const bool on_plugin_page = !scrolling_ && active_page_ >= kPageIdxGenericFirst;
+  // Battery-overlay-tied-to-printer-pages is a known, documented special
+  // case (see CLAUDE.md's "Battery routed through PrinterSnapshot" note —
+  // generalizing this is explicitly future work, not this phase's job).
+  bool on_printer_page = false;
+  {
+    int printer_base = 0;
+    uint8_t printer_count = 0;
+    if (ui_shell_.plugin_page_range("printer", &printer_base, &printer_count)) {
+      on_printer_page = active_page_ >= printer_base &&
+                        active_page_ < printer_base + static_cast<int>(printer_count);
+    }
+  }
+  const bool on_plugin_page = !scrolling_ && !on_printer_page;
 
   // fixed_overlay_ contains the full-screen arc (466×466 px).  Setting opa to any
   // fractional value forces LVGL to render the entire widget tree into a 24 KB
@@ -1294,52 +606,6 @@ void Ui::apply_page0_parallax(bool force) {
   lv_obj_set_style_opa(progress_label_, progress_opa, 0);
   lv_obj_set_style_opa(battery_icon_label_, overlay_opa, 0);
   lv_obj_set_style_opa(battery_pct_label_, overlay_opa, 0);
-}
-
-void Ui::apply_snapshot(const PrinterSnapshot& snapshot) {
-  if (!initialized_) {
-    return;
-  }
-  if (scrolling_) {
-    last_snapshot_ = snapshot;
-    deferred_snapshot_ = snapshot;
-    deferred_snapshot_pending_ = true;
-    return;
-  }
-
-  // Pre-decode preview PNG outside LVGL lock, but only when the preview page is
-  // actually active. The decoded cover is ~1 MB, lives in PSRAM, and is kept
-  // cached across page changes so navigating away doesn't create a decode storm.
-  std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw;
-  lv_image_dsc_t pre_decoded_dsc{};
-  const bool preview_page_active = !scrolling_ && active_page_ == kPageIdxPreview;
-  const bool preview_blob_changed =
-      snapshot.preview_blob && !snapshot.preview_blob->empty() &&
-      last_preview_blob_.get() != snapshot.preview_blob.get();
-  // Also pre-decode when the blob exists but hasn't been decoded yet (e.g.
-  // blob arrived while another page was active, then user scrolled to preview).
-  const bool needs_first_decode =
-      !preview_blob_changed && snapshot.preview_blob &&
-      !snapshot.preview_blob->empty() &&
-      (!last_preview_raw_ || last_preview_raw_->empty());
-  if (preview_page_active && (preview_blob_changed || needs_first_decode)) {
-    decode_preview_png(snapshot.preview_blob, &pre_decoded_raw, &pre_decoded_dsc);
-  }
-
-  LvglLockGuard lock(500, "apply_snapshot");
-  if (!lock.locked()) {
-    return;
-  }
-
-  last_snapshot_ = snapshot;
-  if (scrolling_) {
-    deferred_snapshot_ = snapshot;
-    deferred_snapshot_pending_ = true;
-    return;
-  }
-
-  apply_snapshot_locked(snapshot, false,
-                        std::move(pre_decoded_raw), &pre_decoded_dsc);
 }
 
 void Ui::apply_ring_visual(const RingVisual& ring, int progress_value, uint32_t text_hex) {
@@ -1425,402 +691,9 @@ void Ui::apply_ring_visual_locked(const RingVisual& ring, int progress, uint32_t
   }
 
   if (last_ring_text_hex_ != text_hex) {
-    const lv_color_t text_color = lv_color_hex(text_hex);
-    lv_obj_set_style_text_color(progress_label_, text_color, 0);
-    lv_obj_set_style_text_color(status_label_, text_color, 0);
-    // Camera page mirrors the main-page status line: same font/size and
-    // the same lifecycle-driven color (green while printing, red on
-    // failure, etc.) instead of a fixed white.
-    if (page3_note_ != nullptr) {
-      lv_obj_set_style_text_color(page3_note_, text_color, 0);
-    }
+    lv_obj_set_style_text_color(progress_label_, lv_color_hex(text_hex), 0);
     last_ring_text_hex_ = text_hex;
   }
-}
-
-bool Ui::ensure_preview_image_loaded_locked(
-    bool force_reload,
-    std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw,
-    const lv_image_dsc_t* pre_decoded_dsc) {
-  if (force_reload) {
-    release_preview_image_locked();
-  }
-
-  if (last_preview_raw_ && !last_preview_raw_->empty()) {
-    // Source is already installed for this decoded blob. Re-setting it on
-    // every status tick invalidates the full 320px image and can starve other
-    // tasks trying to acquire the LVGL lock.
-    return true;
-  }
-
-  // Use pre-decoded data when available (decoded outside LVGL lock).
-  if (pre_decoded_raw && !pre_decoded_raw->empty() && pre_decoded_dsc != nullptr) {
-    last_preview_raw_ = std::move(pre_decoded_raw);
-    preview_image_dsc_ = *pre_decoded_dsc;
-    lv_image_set_src(page2_image_, &preview_image_dsc_);
-    log_blob_diag("ui preview set_src raw", last_preview_raw_);
-    return true;
-  }
-
-  // No fallback decode under lock — pre-decode happens outside the LVGL
-  // lock in apply_snapshot().  If we reach here without decoded data the
-  // image will appear on the next snapshot tick (~500 ms).
-  return false;
-}
-
-void Ui::release_preview_image_locked() {
-  if (page2_image_ != nullptr) {
-    lv_image_set_src(page2_image_, nullptr);
-  }
-  lv_image_cache_drop(&preview_image_dsc_);
-  last_preview_raw_.reset();
-  std::memset(&preview_image_dsc_, 0, sizeof(preview_image_dsc_));
-}
-
-void Ui::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,
-                               std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw,
-                               const lv_image_dsc_t* pre_decoded_dsc) {
-  LvglLockGuard::note_phase("enter");
-  deferred_snapshot_pending_ = false;
-  update_page_availability_locked(snapshot);
-
-  bool wake_due_to_state_change = false;
-  if (!snapshot.ui_status.empty() && snapshot.ui_status != last_ui_status_) {
-    wake_due_to_state_change = true;
-    last_ui_status_ = snapshot.ui_status;
-  }
-  if (snapshot.print_active != last_print_active_) {
-    wake_due_to_state_change = true;
-    last_print_active_ = snapshot.print_active;
-  }
-  if (wake_due_to_state_change) {
-    note_activity(true);
-  }
-
-  const int progress = std::clamp(static_cast<int>(snapshot.progress_percent + 0.5f), 0, 100);
-
-  // Ring visual is now driven by PrinterPlugin::apply_ring_visual() (called
-  // from its own update_ui(), right after this apply_snapshot() call) —
-  // Ui no longer computes ring color/animation from PrinterSnapshot itself.
-  LvglLockGuard::note_phase("labels");
-  char progress_buffer[8] = {};
-  std::snprintf(progress_buffer, sizeof(progress_buffer), "%d%%", progress);
-  set_label_text_if_changed(progress_label_, progress_buffer);
-  const std::string status_text = lifecycle_label(snapshot);
-  set_label_text_if_changed(status_label_, status_text);
-
-  const std::string detail = detail_text(snapshot);
-
-  // [DIAG] Log what the display is actually showing — on change only.
-  if (status_text != last_diag_status_ || detail != last_diag_detail_ ||
-      snapshot.stage != last_diag_stage_) {
-    last_diag_status_ = status_text;
-    last_diag_detail_ = detail;
-    last_diag_stage_ = snapshot.stage;
-    ESP_LOGI(kTag, "[DIAG] display: status=%s stage=%s detail=%.60s lifecycle=%s",
-             status_text.c_str(), snapshot.stage.c_str(),
-             detail.empty() ? "(-)" : detail.c_str(),
-             to_string(snapshot.lifecycle));
-  }
-  detail_visible_ = !detail.empty();
-  if (detail_visible_) {
-    // Scroll long error / HMS messages so the full TSV-resolved text is
-    // readable on the narrow label.  Warnings (HMS codes without `has_error`)
-    // also scroll: the user otherwise only sees a wrapped/truncated bare
-    // code where the lookup text would not fit on a single line.
-    const bool has_hms_or_error = snapshot.has_error ||
-                                  snapshot.print_error_code != 0 ||
-                                  !snapshot.hms_codes.empty() ||
-                                  snapshot.hms_alert_count > 0;
-    // LVGL's circular-scroll long mode triggers continuous widget invalidation
-    // for the running marquee animation. That work happens regardless of the
-    // detail label being on screen, so on the AMS / preview pages it just
-    // burns LVGL-lock time. Only enable scrolling when the main page is
-    // actually settled in front of the user — every other state falls back
-    // to the cheaper LV_LABEL_LONG_WRAP, which renders once and is silent.
-    const bool main_page_visible = !scrolling_ && active_page_ == kPageIdxMain;
-    const lv_label_long_mode_t desired_mode =
-        (has_hms_or_error && main_page_visible) ? LV_LABEL_LONG_SCROLL_CIRCULAR
-                                                 : LV_LABEL_LONG_WRAP;
-    if (lv_label_get_long_mode(detail_label_) != desired_mode) {
-      lv_label_set_long_mode(detail_label_, desired_mode);
-    }
-    set_label_text_if_changed(detail_label_, detail);
-  }
-
-  const std::string layer = layer_text(snapshot);
-  set_label_text_if_changed(layer_label_, layer);
-
-  // Drive the optional spool icon + grams text alongside the layer counter
-  // (siblings inside layer_row_, hidden when no slicer estimate is known).
-  const std::string filament = filament_estimate_text(snapshot);
-  const bool has_filament_estimate = !filament.empty();
-  // The spool icon (U+F1097) maps to the wrong glyph in the embedded MDI font
-  // (renders as "human-male-board" instead of a spool). Keep it hidden until
-  // the font is regenerated with the correct codepoint mapping.
-  set_hidden(filament_icon_label_, true);
-  set_hidden(filament_value_label_, !has_filament_estimate);
-  if (has_filament_estimate) {
-    set_label_text_if_changed(filament_value_label_, filament);
-  }
-
-  const std::string remaining = show_eta_ ? eta_text(snapshot) : remaining_text(snapshot);
-  set_label_text_if_changed(remaining_label_, remaining);
-  // Hide the clock-icon prefix in ETA mode — leaves more room for "HH:MM"
-  // and avoids the redundant clock-glyph + clock-time stutter.
-  set_hidden(remaining_prefix_label_, show_eta_);
-
-  LvglLockGuard::note_phase("temps");
-  char temp_buffer[24] = {};
-  const bool is_dual_nozzle = snapshot.active_nozzle_index >= 0;
-  const char* active_prefix = is_dual_nozzle ? (snapshot.active_nozzle_index == 1 ? "L " : "R ") : "";
-  const char* secondary_prefix = is_dual_nozzle ? (snapshot.active_nozzle_index == 1 ? "R " : "L ") : "";
-  if (snapshot.nozzle_temp_known || snapshot.nozzle_temp_c > 0.0f) {
-    std::snprintf(temp_buffer, sizeof(temp_buffer), "%s%.0f%s", active_prefix, snapshot.nozzle_temp_c, kDegreeC);
-  } else {
-    std::snprintf(temp_buffer, sizeof(temp_buffer), "%s--%s", active_prefix, kDegreeC);
-  }
-  set_label_text_if_changed(nozzle_value_label_, temp_buffer);
-
-  if (snapshot.bed_temp_known || snapshot.bed_temp_c > 0.0f) {
-    std::snprintf(temp_buffer, sizeof(temp_buffer), "%.0f%s", snapshot.bed_temp_c, kDegreeC);
-  } else {
-    std::snprintf(temp_buffer, sizeof(temp_buffer), "--%s", kDegreeC);
-  }
-  set_label_text_if_changed(bed_value_label_, temp_buffer);
-
-  char nozzle_aux_buf[40] = {};
-  if (is_dual_nozzle &&
-      (snapshot.secondary_nozzle_temp_known || snapshot.secondary_nozzle_temp_c > 0.0f)) {
-    std::snprintf(nozzle_aux_buf, sizeof(nozzle_aux_buf), "%s%.0f%s",
-                  secondary_prefix, snapshot.secondary_nozzle_temp_c, kDegreeC);
-  } else if (!is_dual_nozzle) {
-    const std::string tmp =
-        optional_temperature_text("Other nozzle", snapshot.secondary_nozzle_temp_c,
-                                  snapshot.secondary_nozzle_temp_known);
-    std::snprintf(nozzle_aux_buf, sizeof(nozzle_aux_buf), "%s", tmp.c_str());
-  }
-  const std::string nozzle_aux(nozzle_aux_buf);
-  nozzle_aux_visible_ = !nozzle_aux.empty();
-  if (nozzle_aux_visible_) {
-    set_label_text_if_changed(nozzle_aux_label_, nozzle_aux);
-  }
-
-  const std::string bed_aux =
-      optional_temperature_text("Chamber", snapshot.chamber_temp_c, snapshot.chamber_temp_known);
-  bed_aux_visible_ = !bed_aux.empty();
-  if (bed_aux_visible_) {
-    set_label_text_if_changed(bed_aux_label_, bed_aux);
-  }
-
-  const std::string battery_icon = battery_icon_text(snapshot);
-  const std::string battery_pct = battery_pct_text(snapshot);
-  const bool show_battery = snapshot.battery_present || snapshot.charging;
-  set_label_text_if_changed(battery_icon_label_, show_battery ? battery_icon : "");
-  set_label_text_if_changed(battery_pct_label_, show_battery ? battery_pct : "");
-
-  // --- AMS page rendering ---
-  LvglLockGuard::note_phase("ams");
-  const uint8_t ams_count = snapshot.ams ? snapshot.ams->count : 0;
-  const uint32_t ams_signature = ams_ui_signature(snapshot);
-  const bool ams_visible = scrolling_ ||
-      (active_page_ >= kPageIdxAmsFirst && active_page_ <= kPageIdxAmsLast);
-  const bool render_ams =
-      ams_visible && ams_signature != last_rendered_ams_signature_;
-  if (ams_count > 0 && render_ams) {
-    last_rendered_ams_signature_ = ams_signature;
-    compute_ams_tray_errors(snapshot);
-    const bool show_unit_labels = ams_count > 1;
-    for (int u = 0; u < kMaxAmsUnits; ++u) {
-      if (u < ams_count) {
-        render_ams_unit(u, snapshot, show_unit_labels);
-      }
-    }
-  } else if (render_ams) {
-    last_rendered_ams_signature_ = ams_signature;
-    // No AMS — show "No AMS connected" note on the first AMS page only.
-    for (int u = 0; u < kMaxAmsUnits; ++u) {
-      if (ams_tray_row_[u] != nullptr) {
-        set_hidden(ams_tray_row_[u], true);
-      }
-      if (ams_note_[u] != nullptr) {
-        set_hidden(ams_note_[u], u != 0);
-      }
-      for (int s = 0; s < kMaxAmsTrays; ++s) {
-        ams_tray_error_[u][s] = false;
-      }
-    }
-    if (ams_ext_col_ != nullptr) {
-      set_hidden(ams_ext_col_, true);
-    }
-    apply_ams_error_pulse_locked();
-  }
-
-  LvglLockGuard::note_phase("preview_text");
-  const std::string preview_note = preview_note_text(snapshot);
-  const std::string preview_subnote = preview_subnote_text(snapshot);
-  const std::string camera_note = camera_note_text(snapshot);
-  const std::string camera_subnote = camera_subnote_text(snapshot);
-  bool has_preview_image = false;
-  if (snapshot.preview_blob && !snapshot.preview_blob->empty()) {
-    const bool preview_blob_changed = last_preview_blob_.get() != snapshot.preview_blob.get();
-    last_preview_blob_ = snapshot.preview_blob;
-    if (active_page_ == kPageIdxPreview) {
-      LvglLockGuard::note_phase("preview_image_load");
-      has_preview_image = ensure_preview_image_loaded_locked(
-          preview_blob_changed, std::move(pre_decoded_raw), pre_decoded_dsc);
-    } else if (preview_blob_changed) {
-      release_preview_image_locked();
-    }
-  } else {
-    if (last_preview_blob_ || last_preview_raw_) {
-      release_preview_image_locked();
-    }
-    last_preview_blob_.reset();
-  }
-  const bool has_page2_image = has_preview_image;
-  preview_image_visible_ = has_page2_image;
-
-  if (preview_text_image_mode_ != has_page2_image) {
-    if (has_page2_image) {
-      // Note is hidden when cover is loaded; subnote (title) moves to former note position.
-      lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, kPage2NoteWithImageY);
-    } else {
-      lv_obj_align(page2_note_, LV_ALIGN_CENTER, 0, -14);
-      lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, 18);
-    }
-    preview_text_image_mode_ = has_page2_image;
-  }
-  set_hidden(page2_note_, preview_note.empty());
-  if (!preview_note.empty()) {
-    set_label_text_if_changed(page2_note_, preview_note);
-  }
-  set_hidden(page2_subnote_, preview_subnote.empty());
-  if (!preview_subnote.empty()) {
-    set_label_text_if_changed(page2_subnote_, preview_subnote);
-  }
-  // Avoid LV_LABEL_LONG_SCROLL_CIRCULAR here. It is a permanent LVGL animation
-  // and on the preview page it competes with large image redraws under the
-  // display lock. Use a static dotted title instead.
-  {
-    const bool image_title = active_page_ == kPageIdxPreview && has_page2_image;
-    const lv_label_long_mode_t desired = image_title ? LV_LABEL_LONG_DOT : LV_LABEL_LONG_WRAP;
-    if (lv_label_get_long_mode(page2_subnote_) != desired) {
-      lv_label_set_long_mode(page2_subnote_, desired);
-    }
-  }
-
-  update_print_buttons_locked(snapshot);
-
-  LvglLockGuard::note_phase("camera");
-  bool has_camera_image =
-      camera_slot_initialized_ && camera_blobs_[active_camera_slot_] &&
-      !camera_blobs_[active_camera_slot_]->empty();
-  if (snapshot.camera_blob && !snapshot.camera_blob->empty() && snapshot.camera_width > 0U &&
-      snapshot.camera_height > 0U) {
-    const bool camera_blob_changed =
-        !camera_slot_initialized_ || camera_blobs_[active_camera_slot_].get() != snapshot.camera_blob.get();
-    if (camera_blob_changed ||
-        last_camera_width_ != snapshot.camera_width || last_camera_height_ != snapshot.camera_height) {
-      const uint8_t next_slot =
-          camera_slot_initialized_ ? static_cast<uint8_t>((active_camera_slot_ + 1U) % 2U) : 0U;
-      log_blob_diag("ui camera incoming rgb565", snapshot.camera_blob);
-      lv_image_cache_drop(&camera_image_dscs_[next_slot]);
-      log_heap_diag("ui camera after cache drop");
-      lv_image_dsc_t next_dsc = {};
-      if (configure_camera_rgb565(snapshot.camera_blob, snapshot.camera_width, snapshot.camera_height,
-                                  &next_dsc)) {
-        camera_blobs_[next_slot] = snapshot.camera_blob;
-        camera_image_dscs_[next_slot] = next_dsc;
-        active_camera_slot_ = next_slot;
-        camera_slot_initialized_ = true;
-        last_camera_width_ = snapshot.camera_width;
-        last_camera_height_ = snapshot.camera_height;
-        lv_image_set_src(page3_image_, &camera_image_dscs_[active_camera_slot_]);
-        log_heap_diag("ui camera after lv_image_set_src");
-      } else {
-        camera_blobs_[next_slot].reset();
-        std::memset(&camera_image_dscs_[next_slot], 0, sizeof(camera_image_dscs_[next_slot]));
-        if (!camera_slot_initialized_) {
-          active_camera_slot_ = 0;
-        }
-        last_camera_width_ = 0;
-        last_camera_height_ = 0;
-      }
-    }
-    has_camera_image =
-        camera_slot_initialized_ && camera_blobs_[active_camera_slot_] &&
-        !camera_blobs_[active_camera_slot_]->empty();
-  } else {
-    if (camera_slot_initialized_ && page3_image_ != nullptr) {
-      lv_image_set_src(page3_image_, nullptr);
-    }
-    lv_image_cache_drop(&camera_image_dscs_[0]);
-    lv_image_cache_drop(&camera_image_dscs_[1]);
-    camera_blobs_[0].reset();
-    camera_blobs_[1].reset();
-    camera_slot_initialized_ = false;
-    active_camera_slot_ = 0;
-    last_camera_width_ = 0;
-    last_camera_height_ = 0;
-    std::memset(&camera_image_dscs_[0], 0, sizeof(camera_image_dscs_[0]));
-    std::memset(&camera_image_dscs_[1], 0, sizeof(camera_image_dscs_[1]));
-    has_camera_image = false;
-  }
-  camera_image_visible_ = has_camera_image;
-
-  if (camera_text_image_mode_ != has_camera_image) {
-    if (has_camera_image) {
-      // Status note moves above the image; layer/subnote sits below.
-      lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, kPage3StatusAboveImageY);
-      lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, kPage3NoteWithImageY);
-    } else {
-      lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, 0);
-      lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, 28);
-    }
-    camera_text_image_mode_ = has_camera_image;
-  }
-  set_hidden(page3_note_, camera_note.empty());
-  if (!camera_note.empty()) {
-    set_label_text_if_changed(page3_note_, camera_note);
-  }
-  set_hidden(page3_subnote_, camera_subnote.empty());
-  if (!camera_subnote.empty()) {
-    // Use the same large font as the main-page layer label when showing
-    // "Layer: X / Y", fall back to the regular small font otherwise.
-    const bool subnote_is_layer =
-        has_camera_image && (snapshot.total_layers > 0 || snapshot.current_layer > 0);
-    lv_obj_set_style_text_font(page3_subnote_,
-                               subnote_is_layer ? &dosis_32 : &lv_font_montserrat_20, 0);
-    set_label_text_if_changed(page3_subnote_, camera_subnote);
-  }
-
-  show_logo_ = should_show_logo(snapshot);
-  const bool chamber_light_clickable = snapshot.chamber_light_supported;
-  if (logo_clickable_ != chamber_light_clickable) {
-    set_clickable(logo_badge_, chamber_light_clickable);
-    logo_clickable_ = chamber_light_clickable;
-  }
-
-  const bool logo_recolor_enabled =
-      snapshot.chamber_light_supported && snapshot.chamber_light_state_known &&
-      !snapshot.chamber_light_on;
-  const uint32_t logo_recolor_hex = logo_recolor_enabled ? 0x7A7A7A : 0U;
-  if (logo_recolor_enabled != logo_recolor_enabled_ ||
-      (logo_recolor_enabled && logo_recolor_hex != logo_recolor_hex_)) {
-    if (logo_recolor_enabled) {
-      lv_obj_set_style_image_recolor(logo_image_, lv_color_hex(logo_recolor_hex), 0);
-      lv_obj_set_style_image_recolor_opa(logo_image_, LV_OPA_COVER, 0);
-    } else {
-      lv_obj_set_style_image_recolor_opa(logo_image_, LV_OPA_TRANSP, 0);
-    }
-    logo_recolor_enabled_ = logo_recolor_enabled;
-    logo_recolor_hex_ = logo_recolor_hex;
-  }
-  // Portal hint/PIN overlay is now driven by Application calling
-  // update_portal_access_visuals() directly every loop iteration (core, not
-  // routed through any plugin's snapshot tick) — see that method.
-  apply_page_visibility();
 }
 
 void Ui::stop_ring_animations_locked() {
@@ -1850,485 +723,6 @@ void Ui::pulse_anim_exec_cb(void* var, int32_t scale) {
 
 // --- Multi-AMS helpers --------------------------------------------------------
 
-void Ui::build_ams_page(int unit_idx) {
-  if (unit_idx < 0 || unit_idx >= kMaxAmsUnits) return;
-  lv_obj_t* page = ams_pages_[unit_idx];
-  if (page == nullptr) return;
-
-  // Unit header label ("AMS 1..4") — created always, hidden by default.
-  ams_unit_label_[unit_idx] = lv_label_create(page);
-  char unit_label_buf[16];
-  std::snprintf(unit_label_buf, sizeof(unit_label_buf), "AMS %d", unit_idx + 1);
-  set_label_text_if_changed(ams_unit_label_[unit_idx], unit_label_buf);
-  lv_obj_set_style_text_font(ams_unit_label_[unit_idx], &dosis_32, 0);
-  lv_obj_set_style_text_color(ams_unit_label_[unit_idx], lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_align(ams_unit_label_[unit_idx], LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(ams_unit_label_[unit_idx], LV_ALIGN_TOP_MID, 0, 60);
-  lv_obj_add_flag(ams_unit_label_[unit_idx], LV_OBJ_FLAG_HIDDEN);
-
-  // Gray shelf background (behind upper half of pills)
-  ams_shelf_[unit_idx] = lv_obj_create(page);
-  lv_obj_set_size(ams_shelf_[unit_idx], 359, 110);
-  lv_obj_set_style_radius(ams_shelf_[unit_idx], 20, 0);
-  lv_obj_set_style_bg_color(ams_shelf_[unit_idx], lv_color_hex(0x565656), 0);
-  lv_obj_set_style_bg_opa(ams_shelf_[unit_idx], LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(ams_shelf_[unit_idx], 2, 0);
-  lv_obj_set_style_border_color(ams_shelf_[unit_idx], lv_color_hex(0x888888), 0);
-  lv_obj_set_style_border_opa(ams_shelf_[unit_idx], LV_OPA_COVER, 0);
-  lv_obj_set_style_border_side(ams_shelf_[unit_idx],
-      static_cast<lv_border_side_t>(LV_BORDER_SIDE_TOP | LV_BORDER_SIDE_LEFT | LV_BORDER_SIDE_RIGHT), 0);
-  lv_obj_align(ams_shelf_[unit_idx], LV_ALIGN_CENTER, 0, -50);
-  lv_obj_clear_flag(ams_shelf_[unit_idx], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(ams_shelf_[unit_idx], LV_OBJ_FLAG_CLICKABLE);
-  enable_touch_bubble(ams_shelf_[unit_idx]);
-
-  // Dark base behind lower half of pills
-  ams_base_[unit_idx] = lv_obj_create(page);
-  lv_obj_set_size(ams_base_[unit_idx], 385, 103);
-  lv_obj_set_style_radius(ams_base_[unit_idx], 0, 0);
-  lv_obj_set_style_bg_color(ams_base_[unit_idx], lv_color_hex(0x1F1F1F), 0);
-  lv_obj_set_style_bg_opa(ams_base_[unit_idx], LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(ams_base_[unit_idx], 2, 0);
-  lv_obj_set_style_border_color(ams_base_[unit_idx], lv_color_hex(0x888888), 0);
-  lv_obj_set_style_border_opa(ams_base_[unit_idx], LV_OPA_COVER, 0);
-  lv_obj_set_style_border_side(ams_base_[unit_idx], LV_BORDER_SIDE_FULL, 0);
-  lv_obj_align(ams_base_[unit_idx], LV_ALIGN_CENTER, 0, 35);
-  lv_obj_clear_flag(ams_base_[unit_idx], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(ams_base_[unit_idx], LV_OBJ_FLAG_CLICKABLE);
-  enable_touch_bubble(ams_base_[unit_idx]);
-
-  ams_tray_row_[unit_idx] = lv_obj_create(page);
-  lv_obj_set_size(ams_tray_row_[unit_idx], 420, LV_SIZE_CONTENT);
-  make_transparent(ams_tray_row_[unit_idx]);
-  lv_obj_set_flex_flow(ams_tray_row_[unit_idx], LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(ams_tray_row_[unit_idx], LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(ams_tray_row_[unit_idx], 6, 0);
-  lv_obj_align(ams_tray_row_[unit_idx], LV_ALIGN_CENTER, 0, -13);
-  lv_obj_clear_flag(ams_tray_row_[unit_idx], LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(ams_tray_row_[unit_idx]);
-
-  for (int i = 0; i < kMaxAmsTrays; ++i) {
-    ams_tray_col_[unit_idx][i] = lv_obj_create(ams_tray_row_[unit_idx]);
-    lv_obj_set_size(ams_tray_col_[unit_idx][i], 76, LV_SIZE_CONTENT);
-    make_transparent(ams_tray_col_[unit_idx][i]);
-    lv_obj_set_flex_flow(ams_tray_col_[unit_idx][i], LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(ams_tray_col_[unit_idx][i], LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(ams_tray_col_[unit_idx][i], 4, 0);
-    lv_obj_set_style_pad_all(ams_tray_col_[unit_idx][i], 0, 0);
-    lv_obj_clear_flag(ams_tray_col_[unit_idx][i], LV_OBJ_FLAG_SCROLLABLE);
-
-    ams_tray_rect_[unit_idx][i] = lv_obj_create(ams_tray_col_[unit_idx][i]);
-    lv_obj_set_size(ams_tray_rect_[unit_idx][i], 72, 140);
-    lv_obj_set_style_radius(ams_tray_rect_[unit_idx][i], 40, 0);
-    lv_obj_set_style_bg_color(ams_tray_rect_[unit_idx][i], lv_color_hex(0x333333), 0);
-    lv_obj_set_style_bg_opa(ams_tray_rect_[unit_idx][i], LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(ams_tray_rect_[unit_idx][i], 1, 0);
-    lv_obj_set_style_border_color(ams_tray_rect_[unit_idx][i], lv_color_hex(0x555555), 0);
-    lv_obj_set_style_border_opa(ams_tray_rect_[unit_idx][i], LV_OPA_COVER, 0);
-    lv_obj_set_style_outline_width(ams_tray_rect_[unit_idx][i], 0, 0);
-    lv_obj_set_style_pad_all(ams_tray_rect_[unit_idx][i], 0, 0);
-    lv_obj_set_style_clip_corner(ams_tray_rect_[unit_idx][i], true, 0);
-    lv_obj_clear_flag(ams_tray_rect_[unit_idx][i], LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ams_tray_rect_[unit_idx][i], LV_OBJ_FLAG_CLICKABLE);
-    // Diamond/rhombus pattern overlay drawn when this slot has an HMS error.
-    lv_obj_add_event_cb(ams_tray_rect_[unit_idx][i], ams_pill_error_overlay_cb,
-                        LV_EVENT_DRAW_POST, &ams_tray_error_[unit_idx][i]);
-
-    ams_tray_type_[unit_idx][i] = lv_label_create(ams_tray_rect_[unit_idx][i]);
-    set_label_text_if_changed(ams_tray_type_[unit_idx][i], "--");
-    lv_obj_set_width(ams_tray_type_[unit_idx][i], 68);
-    lv_label_set_long_mode(ams_tray_type_[unit_idx][i], LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(ams_tray_type_[unit_idx][i], LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(ams_tray_type_[unit_idx][i], &dosis_20, 0);
-    lv_obj_set_style_text_color(ams_tray_type_[unit_idx][i], lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(ams_tray_type_[unit_idx][i], LV_ALIGN_TOP_MID, 0, 10);
-
-    ams_tray_fill_[unit_idx][i] = lv_obj_create(ams_tray_rect_[unit_idx][i]);
-    lv_obj_set_size(ams_tray_fill_[unit_idx][i], 72, 0);
-    lv_obj_set_style_radius(ams_tray_fill_[unit_idx][i], 0, 0);
-    lv_obj_set_style_bg_color(ams_tray_fill_[unit_idx][i], lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(ams_tray_fill_[unit_idx][i], LV_OPA_40, 0);
-    lv_obj_set_style_border_width(ams_tray_fill_[unit_idx][i], 0, 0);
-    lv_obj_align(ams_tray_fill_[unit_idx][i], LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_clear_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-
-    ams_tray_arrow_[unit_idx][i] = lv_obj_create(ams_tray_col_[unit_idx][i]);
-    lv_obj_set_size(ams_tray_arrow_[unit_idx][i], 40, 25);
-    make_transparent(ams_tray_arrow_[unit_idx][i]);
-    // bg_color carries the triangle color; bg_opa stays 0 so the OBJ background
-    // is invisible and only the triangle drawn in ams_arrow_draw_cb is visible.
-    lv_obj_set_style_bg_color(ams_tray_arrow_[unit_idx][i], lv_color_hex(0x1F1F1F), 0);
-    lv_obj_set_style_pad_all(ams_tray_arrow_[unit_idx][i], 0, 0);
-    lv_obj_clear_flag(ams_tray_arrow_[unit_idx][i], LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ams_tray_arrow_[unit_idx][i], LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(ams_tray_arrow_[unit_idx][i], ams_arrow_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
-  }
-
-  // Floating percentage labels above pills (ignore layout)
-  for (int i = 0; i < kMaxAmsTrays; ++i) {
-    ams_tray_pct_[unit_idx][i] = lv_label_create(page);
-    set_label_text_if_changed(ams_tray_pct_[unit_idx][i], "");
-    lv_obj_set_style_text_font(ams_tray_pct_[unit_idx][i], &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(ams_tray_pct_[unit_idx][i], lv_color_hex(0xFFFFFF), 0);
-    lv_obj_add_flag(ams_tray_pct_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ams_tray_pct_[unit_idx][i], LV_OBJ_FLAG_IGNORE_LAYOUT);
-  }
-
-  // Humidity pill
-  lv_obj_t* hum_pill = lv_obj_create(page);
-  lv_obj_set_size(hum_pill, 139, 50);
-  lv_obj_set_style_radius(hum_pill, 25, 0);
-  lv_obj_set_style_bg_opa(hum_pill, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_color(hum_pill, lv_color_hex(0x9B9B9B), 0);
-  lv_obj_set_style_border_opa(hum_pill, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(hum_pill, 1, 0);
-  lv_obj_set_style_pad_all(hum_pill, 0, 0);
-  lv_obj_align(hum_pill, LV_ALIGN_CENTER, 0, 135);
-  lv_obj_clear_flag(hum_pill, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_flex_flow(hum_pill, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(hum_pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(hum_pill, 8, 0);
-
-  ams_humidity_drop_[unit_idx] = lv_obj_create(hum_pill);
-  lv_obj_set_size(ams_humidity_drop_[unit_idx], 14, 14);
-  lv_obj_set_style_radius(ams_humidity_drop_[unit_idx], LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_color(ams_humidity_drop_[unit_idx], lv_color_hex(0x4A90D9), 0);
-  lv_obj_set_style_bg_opa(ams_humidity_drop_[unit_idx], LV_OPA_COVER, 0);
-  lv_obj_set_style_border_width(ams_humidity_drop_[unit_idx], 0, 0);
-  lv_obj_clear_flag(ams_humidity_drop_[unit_idx], LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_clear_flag(ams_humidity_drop_[unit_idx], LV_OBJ_FLAG_CLICKABLE);
-
-  ams_humidity_label_[unit_idx] = lv_label_create(hum_pill);
-  set_label_text_if_changed(ams_humidity_label_[unit_idx], "--");
-  lv_obj_set_style_text_font(ams_humidity_label_[unit_idx], &dosis_20, 0);
-  lv_obj_set_style_text_color(ams_humidity_label_[unit_idx], lv_color_hex(0x94A3B8), 0);
-  lv_obj_set_style_text_align(ams_humidity_label_[unit_idx], LV_TEXT_ALIGN_CENTER, 0);
-
-  ams_temp_label_[unit_idx] = lv_label_create(hum_pill);
-  set_label_text_if_changed(ams_temp_label_[unit_idx], "--\xC2\xB0""C");
-  lv_obj_set_style_text_font(ams_temp_label_[unit_idx], &dosis_20, 0);
-  lv_obj_set_style_text_color(ams_temp_label_[unit_idx], lv_color_hex(0x94A3B8), 0);
-  lv_obj_set_style_text_align(ams_temp_label_[unit_idx], LV_TEXT_ALIGN_CENTER, 0);
-
-  // External-spool widgets only on the first AMS page.
-  if (unit_idx == 0) {
-    ams_ext_col_ = lv_obj_create(page);
-    lv_obj_set_size(ams_ext_col_, 56, LV_SIZE_CONTENT);
-    make_transparent(ams_ext_col_);
-    lv_obj_set_flex_flow(ams_ext_col_, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(ams_ext_col_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                          LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(ams_ext_col_, 4, 0);
-    lv_obj_set_style_pad_all(ams_ext_col_, 0, 0);
-    lv_obj_add_flag(ams_ext_col_, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_clear_flag(ams_ext_col_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(ams_ext_col_, LV_OBJ_FLAG_HIDDEN);
-
-    ams_ext_rect_ = lv_obj_create(ams_ext_col_);
-    lv_obj_set_size(ams_ext_rect_, 52, 108);
-    lv_obj_set_style_radius(ams_ext_rect_, 32, 0);
-    lv_obj_set_style_bg_color(ams_ext_rect_, lv_color_hex(0x444444), 0);
-    lv_obj_set_style_bg_opa(ams_ext_rect_, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(ams_ext_rect_, 1, 0);
-    lv_obj_set_style_border_color(ams_ext_rect_, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_border_opa(ams_ext_rect_, LV_OPA_COVER, 0);
-    lv_obj_set_style_outline_width(ams_ext_rect_, 0, 0);
-    lv_obj_set_style_pad_all(ams_ext_rect_, 0, 0);
-    lv_obj_set_style_clip_corner(ams_ext_rect_, true, 0);
-    lv_obj_clear_flag(ams_ext_rect_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ams_ext_rect_, LV_OBJ_FLAG_CLICKABLE);
-
-    ams_ext_type_ = lv_label_create(ams_ext_rect_);
-    set_label_text_if_changed(ams_ext_type_, "EXT");
-    lv_obj_set_width(ams_ext_type_, 48);
-    lv_label_set_long_mode(ams_ext_type_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(ams_ext_type_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(ams_ext_type_, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(ams_ext_type_, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(ams_ext_type_, LV_ALIGN_CENTER, 0, 8);
-
-    ams_ext_mat_ = lv_label_create(ams_ext_rect_);
-    set_label_text_if_changed(ams_ext_mat_, "");
-    lv_obj_set_width(ams_ext_mat_, 48);
-    lv_label_set_long_mode(ams_ext_mat_, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_align(ams_ext_mat_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(ams_ext_mat_, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(ams_ext_mat_, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_align(ams_ext_mat_, LV_ALIGN_TOP_MID, 0, 12);
-
-    ams_ext_arrow_ = lv_obj_create(ams_ext_col_);
-    lv_obj_set_size(ams_ext_arrow_, 35, 23);
-    make_transparent(ams_ext_arrow_);
-    // bg_color carries the triangle color; bg_opa stays 0 (see ams_arrow_draw_cb).
-    lv_obj_set_style_bg_color(ams_ext_arrow_, lv_color_hex(0x1F1F1F), 0);
-    lv_obj_set_style_pad_all(ams_ext_arrow_, 0, 0);
-    lv_obj_clear_flag(ams_ext_arrow_, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(ams_ext_arrow_, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(ams_ext_arrow_, ams_arrow_draw_cb, LV_EVENT_DRAW_MAIN, nullptr);
-  }
-
-  ams_note_[unit_idx] = lv_label_create(page);
-  set_label_text_if_changed(ams_note_[unit_idx], "No AMS connected");
-  lv_obj_set_width(ams_note_[unit_idx], 280);
-  lv_label_set_long_mode(ams_note_[unit_idx], LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(ams_note_[unit_idx], LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(ams_note_[unit_idx], &dosis_20, 0);
-  lv_obj_set_style_text_color(ams_note_[unit_idx], lv_color_hex(0x666666), 0);
-  lv_obj_align(ams_note_[unit_idx], LV_ALIGN_CENTER, 0, 0);
-  lv_obj_add_flag(ams_note_[unit_idx], LV_OBJ_FLAG_HIDDEN);
-}
-
-void Ui::compute_ams_tray_errors(const PrinterSnapshot& snapshot) {
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    for (int s = 0; s < kMaxAmsTrays; ++s) {
-      ams_tray_error_[u][s] = false;
-    }
-  }
-  for (uint64_t code : snapshot.hms_codes) {
-    const uint32_t attr = static_cast<uint32_t>(code >> 32);
-    const uint8_t module_id = (attr >> 24) & 0xFFU;
-    if (module_id != 0x07U) continue;  // not an AMS-class HMS code
-    const uint8_t module_num = (attr >> 16) & 0xFFU;
-    int unit_idx = (module_num >= 128) ? (module_num - 128) : module_num;
-    if (unit_idx < 0 || unit_idx >= kMaxAmsUnits) continue;
-    const uint8_t part_id = (attr >> 8) & 0xFFU;
-    // Slot mapping (BambuStudio convention): part_id values 0x20..0x23 map to
-    // slots 0..3. Other part_id values describe unit-level errors and are
-    // ignored for per-slot overlay (a unit-level indicator could be added
-    // later via a shared marker on ams_unit_label_).
-    if (part_id >= 0x20U && part_id <= 0x20U + (kMaxAmsTrays - 1)) {
-      const int slot_idx = part_id - 0x20U;
-      ams_tray_error_[unit_idx][slot_idx] = true;
-    }
-  }
-  apply_ams_error_pulse_locked();
-}
-
-void Ui::ams_error_pulse_timer_cb(lv_timer_t* timer) {
-  auto* ui = static_cast<Ui*>(lv_timer_get_user_data(timer));
-  if (ui == nullptr) return;
-  ui->ams_error_pulse_phase_ = (ui->ams_error_pulse_phase_ + 1U) & 0x3FU;
-  // Triangle wave 0..32 → blend factor between dark and red. The arrow stays
-  // fully opaque (LV_OPA_COVER); only the color changes, so it never bleeds
-  // through the pill background like opacity-based pulsing did.
-  const int32_t phase = static_cast<int32_t>(ui->ams_error_pulse_phase_);
-  const int32_t tri = phase < 32 ? phase : (64 - phase);  // 0..32
-  // Blend factor 0..255 (with a small floor so the dim end stays visible).
-  const int32_t mix = 60 + tri * 6;  // 60..252
-  // Lerp 0x1F1F1F → 0xEF4444
-  const int32_t r = (0x1F * (255 - mix) + 0xEF * mix) / 255;
-  const int32_t g = (0x1F * (255 - mix) + 0x44 * mix) / 255;
-  const int32_t b = (0x1F * (255 - mix) + 0x44 * mix) / 255;
-  const lv_color_t col = lv_color_hex(
-      (static_cast<uint32_t>(r) << 16) |
-      (static_cast<uint32_t>(g) << 8) |
-      static_cast<uint32_t>(b));
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    for (int s = 0; s < kMaxAmsTrays; ++s) {
-      if (!ui->ams_tray_error_[u][s]) continue;
-      lv_obj_t* arrow = ui->ams_tray_arrow_[u][s];
-      if (arrow == nullptr) continue;
-      lv_obj_set_style_bg_color(arrow, col, 0);
-      lv_obj_invalidate(arrow);
-    }
-  }
-}
-
-void Ui::apply_ams_error_pulse_locked() {
-  bool any_error = false;
-  for (int u = 0; u < kMaxAmsUnits && !any_error; ++u) {
-    for (int s = 0; s < kMaxAmsTrays && !any_error; ++s) {
-      if (ams_tray_error_[u][s]) any_error = true;
-    }
-  }
-
-  // Force pill redraw so the rhombus overlay event-cb re-runs with the new
-  // flag value. Arrow color/opacity is owned by render_ams_unit() (non-error)
-  // and the pulse timer (error) — we must not override it here, otherwise we
-  // would clobber the green "active" indicator on non-error slots.
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    for (int s = 0; s < kMaxAmsTrays; ++s) {
-      if (ams_tray_rect_[u][s] != nullptr) {
-        lv_obj_invalidate(ams_tray_rect_[u][s]);
-      }
-    }
-  }
-
-  if (any_error && ams_error_pulse_timer_ == nullptr) {
-    ams_error_pulse_timer_ = lv_timer_create(&Ui::ams_error_pulse_timer_cb, 60, this);
-  } else if (!any_error && ams_error_pulse_timer_ != nullptr) {
-    lv_timer_delete(ams_error_pulse_timer_);
-    ams_error_pulse_timer_ = nullptr;
-    ams_error_pulse_phase_ = 0;
-  }
-}
-
-void Ui::render_ams_unit(int unit_idx, const PrinterSnapshot& snapshot, bool show_unit_label) {
-  if (unit_idx < 0 || unit_idx >= kMaxAmsUnits) return;
-  if (snapshot.ams == nullptr) return;
-  const AmsUnitInfo& unit = snapshot.ams->units[unit_idx];
-
-  // Unit header label
-  if (ams_unit_label_[unit_idx] != nullptr) {
-    set_hidden(ams_unit_label_[unit_idx], !show_unit_label);
-  }
-
-  const bool ext_spool_active =
-      unit_idx == 0 && (snapshot.tray_now == 254 || snapshot.tray_tar == 254);
-
-  // Dynamic ext-spool layout shrink — only on AMS page 0.
-  if (unit_idx == 0 && ext_spool_active != ams_ext_spool_shown_) {
-    ams_ext_spool_shown_ = ext_spool_active;
-    if (ext_spool_active) {
-      for (int i = 0; i < kMaxAmsTrays; ++i) {
-        lv_obj_set_size(ams_tray_col_[0][i], 58, LV_SIZE_CONTENT);
-        lv_obj_set_size(ams_tray_rect_[0][i], 54, 108);
-        lv_obj_set_style_radius(ams_tray_rect_[0][i], 30, 0);
-        lv_obj_set_width(ams_tray_type_[0][i], 50);
-        lv_obj_set_size(ams_tray_fill_[0][i], 54, 0);
-      }
-      lv_obj_set_size(ams_shelf_[0], 275, 85);
-      lv_obj_align(ams_shelf_[0], LV_ALIGN_CENTER, 38, -55);
-      lv_obj_set_size(ams_base_[0], 300, 80);
-      lv_obj_align(ams_base_[0], LV_ALIGN_CENTER, 38, 19);
-      lv_obj_set_size(ams_tray_row_[0], 310, LV_SIZE_CONTENT);
-      lv_obj_align(ams_tray_row_[0], LV_ALIGN_CENTER, 38, -30);
-      lv_obj_align(ams_ext_col_, LV_ALIGN_CENTER, -155, -30);
-      lv_obj_clear_flag(ams_ext_col_, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      for (int i = 0; i < kMaxAmsTrays; ++i) {
-        lv_obj_set_size(ams_tray_col_[0][i], 76, LV_SIZE_CONTENT);
-        lv_obj_set_size(ams_tray_rect_[0][i], 72, 140);
-        lv_obj_set_style_radius(ams_tray_rect_[0][i], 40, 0);
-        lv_obj_set_width(ams_tray_type_[0][i], 68);
-        lv_obj_set_size(ams_tray_fill_[0][i], 72, 0);
-      }
-      lv_obj_set_size(ams_shelf_[0], 359, 110);
-      lv_obj_align(ams_shelf_[0], LV_ALIGN_CENTER, 0, -50);
-      lv_obj_set_size(ams_base_[0], 385, 103);
-      lv_obj_align(ams_base_[0], LV_ALIGN_CENTER, 0, 35);
-      lv_obj_set_size(ams_tray_row_[0], 420, LV_SIZE_CONTENT);
-      lv_obj_align(ams_tray_row_[0], LV_ALIGN_CENTER, 0, -13);
-      lv_obj_add_flag(ams_ext_col_, LV_OBJ_FLAG_HIDDEN);
-    }
-  }
-
-  // External spool styling (only on unit 0 when active).
-  if (unit_idx == 0 && ext_spool_active) {
-    const AmsTrayInfo& ext = snapshot.ams->external_spool;
-    if (ext.color_rgba != 0) {
-      const uint32_t ext_rgb = (ext.color_rgba >> 8) & 0x00FFFFFF;
-      lv_obj_set_style_bg_color(ams_ext_rect_, lv_color_hex(ext_rgb), 0);
-      const bool ext_dark = ((ext_rgb >> 16) & 0xFF) * 299 +
-                            ((ext_rgb >> 8) & 0xFF) * 587 +
-                            (ext_rgb & 0xFF) * 114 < 128000;
-      const lv_color_t txt_col = lv_color_hex(ext_dark ? 0xFFFFFF : 0x000000);
-      lv_obj_set_style_text_color(ams_ext_type_, txt_col, 0);
-      lv_obj_set_style_text_color(ams_ext_mat_, txt_col, 0);
-    } else {
-      lv_obj_set_style_bg_color(ams_ext_rect_, lv_color_hex(0x444444), 0);
-      lv_obj_set_style_text_color(ams_ext_type_, lv_color_hex(0xFFFFFF), 0);
-      lv_obj_set_style_text_color(ams_ext_mat_, lv_color_hex(0xFFFFFF), 0);
-    }
-    lv_obj_set_style_bg_opa(ams_ext_rect_, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(ams_ext_rect_, 1, 0);
-    lv_obj_set_style_border_color(ams_ext_rect_, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_outline_width(ams_ext_rect_, 0, 0);
-    lv_obj_set_style_bg_color(ams_ext_arrow_, lv_color_hex(0x4ADE80), 0);
-    const char* mat_label = !ext.material_type.empty() ? ext.material_type.c_str() : "";
-    set_label_text_if_changed(ams_ext_mat_, mat_label);
-  }
-
-  const int pill_h = (unit_idx == 0 && ext_spool_active) ? 108 : 140;
-
-  for (int i = 0; i < kMaxAmsTrays; ++i) {
-    const AmsTrayInfo& tray = unit.trays[i];
-    lv_obj_t* rect = ams_tray_rect_[unit_idx][i];
-    lv_obj_t* arrow = ams_tray_arrow_[unit_idx][i];
-    const bool has_error = ams_tray_error_[unit_idx][i];
-    if (tray.present) {
-      const uint32_t rgba = tray.color_rgba;
-      const uint32_t rgb = (rgba >> 8) & 0x00FFFFFF;
-      lv_obj_set_style_bg_color(rect, lv_color_hex(rgb), 0);
-      lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
-      lv_obj_set_style_border_width(rect, 1, 0);
-      lv_obj_set_style_border_color(rect, lv_color_hex(0x555555), 0);
-      lv_obj_set_style_outline_width(rect, 0, 0);
-      if (has_error) {
-        // Red triangle on error (color pulses via timer).
-        lv_obj_set_style_bg_color(arrow, lv_color_hex(0xEF4444), 0);
-      } else if (tray.active) {
-        lv_obj_set_style_bg_color(arrow, lv_color_hex(0x4ADE80), 0);
-      } else {
-        lv_obj_set_style_bg_color(arrow, lv_color_hex(0x1F1F1F), 0);
-      }
-      set_label_text_if_changed(ams_tray_type_[unit_idx][i],
-                                tray.material_type.empty() ? "--" : tray.material_type);
-      const bool is_dark = ((rgb >> 16) & 0xFF) * 299 +
-                           ((rgb >> 8) & 0xFF) * 587 +
-                           (rgb & 0xFF) * 114 < 128000;
-      lv_obj_set_style_text_color(ams_tray_type_[unit_idx][i],
-          lv_color_hex(is_dark ? 0xFFFFFF : 0x000000), 0);
-
-      if (tray.remain_pct >= 0) {
-        const int empty_h = pill_h - (pill_h * tray.remain_pct / 100);
-        lv_obj_set_height(ams_tray_fill_[unit_idx][i], empty_h);
-        lv_obj_align(ams_tray_fill_[unit_idx][i], LV_ALIGN_TOP_MID, 0, 0);
-        lv_obj_clear_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-        char pct_buf[8];
-        std::snprintf(pct_buf, sizeof(pct_buf), "%d%%", tray.remain_pct);
-        set_label_text_if_changed(ams_tray_pct_[unit_idx][i], pct_buf);
-        lv_obj_set_style_text_color(ams_tray_pct_[unit_idx][i],
-            lv_color_hex(is_dark ? 0xFFFFFF : 0x000000), 0);
-        lv_obj_clear_flag(ams_tray_pct_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_align_to(ams_tray_pct_[unit_idx][i], rect,
-                        LV_ALIGN_BOTTOM_MID, 0, -10);
-      } else {
-        lv_obj_add_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(ams_tray_pct_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-      }
-    } else {
-      lv_obj_set_style_bg_color(rect, lv_color_hex(0x333333), 0);
-      lv_obj_set_style_bg_opa(rect, LV_OPA_COVER, 0);
-      lv_obj_set_style_border_width(rect, 1, 0);
-      lv_obj_set_style_border_color(rect, lv_color_hex(0x555555), 0);
-      lv_obj_set_style_outline_width(rect, 0, 0);
-      set_label_text_if_changed(ams_tray_type_[unit_idx][i], "Empty");
-      lv_obj_add_flag(ams_tray_fill_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-      lv_obj_add_flag(ams_tray_pct_[unit_idx][i], LV_OBJ_FLAG_HIDDEN);
-      if (has_error) {
-        lv_obj_set_style_bg_color(arrow, lv_color_hex(0xEF4444), 0);
-      } else {
-        lv_obj_set_style_bg_color(arrow, lv_color_hex(0x1F1F1F), 0);
-      }
-    }
-  }
-
-  // Humidity + temperature
-  char hum_buf[16] = {};
-  if (unit.humidity_pct >= 0) {
-    std::snprintf(hum_buf, sizeof(hum_buf), "%d%%", unit.humidity_pct);
-  } else {
-    std::snprintf(hum_buf, sizeof(hum_buf), "--%% ");
-  }
-  set_label_text_if_changed(ams_humidity_label_[unit_idx], hum_buf);
-
-  char temp_buf[24] = {};
-  if (unit.temperature_c > 0.0f) {
-    std::snprintf(temp_buf, sizeof(temp_buf), "%.0f%s", unit.temperature_c, kDegreeC);
-  } else {
-    std::snprintf(temp_buf, sizeof(temp_buf), "--%s", kDegreeC);
-  }
-  set_label_text_if_changed(ams_temp_label_[unit_idx], temp_buf);
-
-  set_hidden(ams_tray_row_[unit_idx], false);
-  set_hidden(ams_note_[unit_idx], true);
-}
 
 esp_err_t Ui::build_dashboard() {
   LvglLockGuard lock(3000, "build_dashboard");
@@ -2342,11 +736,8 @@ esp_err_t Ui::build_dashboard() {
   apply_display_rotation_tilt_correction(screen_, display_rotation_, display_tilt_deci_deg_);
 
   const lv_font_t* dosis20 = &dosis_20;
-  const lv_font_t* dosis32 = &dosis_32;
   const lv_font_t* dosis40 = &dosis_40;
-  const lv_font_t* info20 = &lv_font_montserrat_20;
   const lv_font_t* mdi30 = &mdi_30;
-  const lv_font_t* mdi40 = &mdi_40;
 
   lv_obj_t* pager = lv_obj_create(screen_);
   lv_obj_set_size(pager, board::kDisplayWidth, board::kDisplayHeight);
@@ -2374,18 +765,11 @@ esp_err_t Ui::build_dashboard() {
     return page;
   };
 
-  page0_ = create_page(pager);
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    ams_pages_[u] = create_page(pager);
-    enable_touch_bubble(ams_pages_[u]);
-  }
-  page1_ = create_page(pager);
-  page2_ = create_page(pager);
-  page3_ = create_page(pager);
-  // plugin_pool_size_ was set by reserve_plugin_page_pool() before
-  // initialize() ran (Application does this once, summing every compiled-in
-  // plugin's page_count()); allocate at least 1 slot so the unique_ptr is
-  // never null even when no plugin wants a generic page.
+  // Generic plugin-page pool — every compiled-in plugin's pages (printer's
+  // included, as of Phase 4b/4c) live here uniformly, sized once by
+  // reserve_plugin_page_pool() (Application, before initialize() runs).
+  // Allocate at least 1 slot so the unique_ptr is never null even when no
+  // plugin wants a page.
   plugin_pages_ = std::make_unique<lv_obj_t*[]>(plugin_pool_size_ > 0 ? plugin_pool_size_ : 1);
   plugin_pages_enabled_ = std::make_unique<bool[]>(plugin_pool_size_ > 0 ? plugin_pool_size_ : 1);
   for (uint16_t i = 0; i < plugin_pool_size_; ++i) {
@@ -2393,27 +777,9 @@ esp_err_t Ui::build_dashboard() {
     plugin_pages_enabled_[i] = false;
     enable_touch_bubble(plugin_pages_[i]);
   }
-  enable_touch_bubble(page0_);
-  enable_touch_bubble(page1_);
-  enable_touch_bubble(page2_);
-  enable_touch_bubble(page3_);
 
-  // Page 0 (printer-selector) content is built by PrinterPlugin::build_screen()
-  // against printer_select_page_container() — Ui only creates the bare page
-  // container above (same as the generic plugin pages built in the loop above).
-
-  // --- AMS pages (one per AMS unit, indices kPageIdxAmsFirst..kPageIdxAmsLast) ---
-  // Build all kMaxAmsUnits AMS pages up front; each page is hidden until the
-  // backend reports a corresponding unit. The first AMS page additionally hosts
-  // the external-spool widgets (which dynamically shrink that page's pills).
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    build_ams_page(u);
-    lv_obj_add_flag(ams_pages_[u], LV_OBJ_FLAG_HIDDEN);
-    ams_unit_present_[u] = false;
-  }
-  ams_ext_spool_shown_ = false;
-
-
+  // --- Shared overlay: status ring, progress %, battery — genuinely core,
+  // rendered on lv_layer_top()/fixed_overlay_, not any single plugin's page.
   fixed_overlay_ = lv_obj_create(screen_);
   lv_obj_set_size(fixed_overlay_, board::kDisplayWidth, board::kDisplayHeight);
   lv_obj_center(fixed_overlay_);
@@ -2452,13 +818,14 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_move_foreground(progress_label_);
 
   battery_icon_label_ = lv_label_create(lv_layer_top());
-  set_label_text_if_changed(battery_icon_label_, kMdiBattery100);
+  set_label_text_if_changed(battery_icon_label_, "");
   lv_obj_set_style_text_font(battery_icon_label_, mdi30, 0);
   lv_obj_set_style_text_color(battery_icon_label_, lv_color_hex(0xFFFFFF), 0);
   lv_obj_align(battery_icon_label_, LV_ALIGN_CENTER, -20, -140);
   apply_display_rotation_visual_offset(battery_icon_label_, display_rotation_);
   apply_display_rotation_tilt_correction(battery_icon_label_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_move_foreground(battery_icon_label_);
+  lv_obj_add_flag(battery_icon_label_, LV_OBJ_FLAG_HIDDEN);
 
   battery_pct_label_ = lv_label_create(lv_layer_top());
   set_label_text_if_changed(battery_pct_label_, "--%");
@@ -2468,165 +835,23 @@ esp_err_t Ui::build_dashboard() {
   apply_display_rotation_visual_offset(battery_pct_label_, display_rotation_);
   apply_display_rotation_tilt_correction(battery_pct_label_, display_rotation_, display_tilt_deci_deg_);
   lv_obj_move_foreground(battery_pct_label_);
+  lv_obj_add_flag(battery_pct_label_, LV_OBJ_FLAG_HIDDEN);
 
-  badge_slot_ = lv_obj_create(page1_);
-  make_transparent(badge_slot_);
-  lv_obj_set_size(badge_slot_, 86, 86);
-  lv_obj_align(badge_slot_, LV_ALIGN_CENTER, 0, -7);
-  lv_obj_clear_flag(badge_slot_, LV_OBJ_FLAG_SCROLLABLE);
-
-  logo_badge_ = lv_obj_create(badge_slot_);
-  lv_obj_set_size(logo_badge_, 120, 120);
-  lv_obj_set_style_radius(logo_badge_, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_bg_opa(logo_badge_, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_border_opa(logo_badge_, LV_OPA_TRANSP, 0);
-  lv_obj_set_style_pad_all(logo_badge_, 0, 0);
-  lv_obj_center(logo_badge_);
-  lv_obj_clear_flag(logo_badge_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(logo_badge_, LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(logo_badge_);
-  lv_obj_add_event_cb(logo_badge_, &Ui::logo_event_cb, LV_EVENT_CLICKED, this);
-
-  logo_image_ = lv_image_create(logo_badge_);
-  lv_image_set_src(logo_image_, &bambuicon_small);
-  lv_image_set_scale(logo_image_, 183);
-  lv_image_set_antialias(logo_image_, true);
-  lv_obj_set_style_image_recolor_opa(logo_image_, LV_OPA_TRANSP, 0);
-  lv_obj_center(logo_image_);
-  lv_obj_clear_flag(logo_image_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(logo_image_, LV_OBJ_FLAG_SCROLLABLE);
-
-  status_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(status_label_, "waiting...");
-  lv_obj_set_style_text_font(status_label_, dosis32, 0);
-  lv_obj_set_style_text_color(status_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(status_label_, LV_ALIGN_CENTER, 0, -86);
-
-  detail_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(detail_label_, "Waiting for printer data");
-  lv_label_set_long_mode(detail_label_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(detail_label_, 320);
-  lv_obj_set_style_text_align(detail_label_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(detail_label_, info20, 0);
-  lv_obj_set_style_text_color(detail_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(detail_label_, LV_ALIGN_CENTER, 0, 114);
-
-  layer_row_ = lv_obj_create(page1_);
-  make_transparent(layer_row_);
-  lv_obj_set_size(layer_row_, 360, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(layer_row_, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(layer_row_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_align(layer_row_, LV_ALIGN_CENTER, 0, 70);
-  lv_obj_clear_flag(layer_row_, LV_OBJ_FLAG_SCROLLABLE);
-
-  layer_label_ = lv_label_create(layer_row_);
-  set_label_text_if_changed(layer_label_, "Layer: -- / --");
-  lv_obj_set_style_text_font(layer_label_, dosis32, 0);
-  lv_obj_set_style_text_color(layer_label_, lv_color_hex(0xDDDDDD), 0);
-
-  // Filament estimate (icon + grams) appears on the right of the layer row
-  // when the cloud history exposes a slicer weight estimate. Both children
-  // are hidden by default and only shown by apply_snapshot_locked() when an
-  // estimate is available so the row stays cleanly centered around the
-  // layer counter when no estimate is known.
-  filament_icon_label_ = lv_label_create(layer_row_);
-  set_label_text_if_changed(filament_icon_label_, kMdiSpool);
-  lv_obj_set_style_text_font(filament_icon_label_, mdi40, 0);
-  lv_obj_set_style_text_color(filament_icon_label_, lv_color_hex(0xC9A227), 0);
-  lv_obj_set_style_pad_left(filament_icon_label_, 14, 0);
-  lv_obj_set_style_pad_right(filament_icon_label_, 4, 0);
-  lv_obj_add_flag(filament_icon_label_, LV_OBJ_FLAG_HIDDEN);
-
-  filament_value_label_ = lv_label_create(layer_row_);
-  set_label_text_if_changed(filament_value_label_, "");
-  lv_obj_set_style_text_font(filament_value_label_, dosis32, 0);
-  lv_obj_set_style_text_color(filament_value_label_, lv_color_hex(0xDDDDDD), 0);
-  // Add a left pad so the value sits a sensible distance from the layer
-  // counter now that the spool icon is hidden.
-  lv_obj_set_style_pad_left(filament_value_label_, 14, 0);
-  lv_obj_add_flag(filament_value_label_, LV_OBJ_FLAG_HIDDEN);
-
-  nozzle_prefix_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(nozzle_prefix_label_, kMdiNozzle);
-  lv_obj_set_style_text_font(nozzle_prefix_label_, mdi40, 0);
-  lv_obj_set_style_text_color(nozzle_prefix_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(nozzle_prefix_label_, LV_ALIGN_CENTER, -182, -10);
-
-  nozzle_value_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(nozzle_value_label_, "--°C");
-  lv_obj_set_style_text_font(nozzle_value_label_, dosis32, 0);
-  lv_obj_set_style_text_color(nozzle_value_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(nozzle_value_label_, LV_ALIGN_CENTER, -132, -10);
-  set_label_text_if_changed(nozzle_value_label_, std::string("--") + kDegreeC);
-
-  nozzle_aux_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(nozzle_aux_label_, "");
-  lv_obj_set_width(nozzle_aux_label_, 170);
-  lv_label_set_long_mode(nozzle_aux_label_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(nozzle_aux_label_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(nozzle_aux_label_, dosis20, 0);
-  lv_obj_set_style_text_color(nozzle_aux_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(nozzle_aux_label_, LV_ALIGN_CENTER, -132, kAuxTempRowY);
-  lv_obj_add_flag(nozzle_aux_label_, LV_OBJ_FLAG_HIDDEN);
-
-  bed_prefix_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(bed_prefix_label_, kMdiBed);
-  lv_obj_set_style_text_font(bed_prefix_label_, mdi40, 0);
-  lv_obj_set_style_text_color(bed_prefix_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(bed_prefix_label_, LV_ALIGN_CENTER, 182, -10);
-
-  bed_value_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(bed_value_label_, "--°C");
-  lv_obj_set_style_text_font(bed_value_label_, dosis32, 0);
-  lv_obj_set_style_text_color(bed_value_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_width(bed_value_label_, 96);
-  lv_obj_set_style_text_align(bed_value_label_, LV_TEXT_ALIGN_RIGHT, 0);
-  lv_obj_align(bed_value_label_, LV_ALIGN_CENTER, 108, -10);
-  set_label_text_if_changed(bed_value_label_, std::string("--") + kDegreeC);
-
-  bed_aux_label_ = lv_label_create(page1_);
-  set_label_text_if_changed(bed_aux_label_, "");
-  lv_obj_set_width(bed_aux_label_, 170);
-  lv_label_set_long_mode(bed_aux_label_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(bed_aux_label_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(bed_aux_label_, dosis20, 0);
-  lv_obj_set_style_text_color(bed_aux_label_, lv_color_hex(0x94A3B8), 0);
-  lv_obj_align(bed_aux_label_, LV_ALIGN_CENTER, 132, kAuxTempRowY);
-  lv_obj_add_flag(bed_aux_label_, LV_OBJ_FLAG_HIDDEN);
-
-  remaining_row_ = lv_obj_create(page1_);
-  make_transparent(remaining_row_);
-  lv_obj_set_size(remaining_row_, 280, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(remaining_row_, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(remaining_row_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
-                        LV_FLEX_ALIGN_CENTER);
-  lv_obj_align(remaining_row_, LV_ALIGN_CENTER, 0, kRemainingRowY);
-  lv_obj_clear_flag(remaining_row_, LV_OBJ_FLAG_SCROLLABLE);
-  // Tap to toggle between remaining duration and predicted finish time.
-  lv_obj_add_flag(remaining_row_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(remaining_row_, &Ui::remaining_row_event_cb, LV_EVENT_CLICKED, this);
-
-  remaining_prefix_label_ = lv_label_create(remaining_row_);
-  set_label_text_if_changed(remaining_prefix_label_, kMdiClock);
-  lv_obj_set_style_text_font(remaining_prefix_label_, mdi40, 0);
-  lv_obj_set_style_text_color(remaining_prefix_label_, lv_color_hex(0x87CEEB), 0);
-  lv_obj_set_style_pad_right(remaining_prefix_label_, 8, 0);
-
-  remaining_label_ = lv_label_create(remaining_row_);
-  set_label_text_if_changed(remaining_label_, "--m");
-  lv_obj_set_style_text_font(remaining_label_, dosis40, 0);
-  lv_obj_set_style_text_color(remaining_label_, lv_color_hex(0x87CEEB), 0);
-
-  portal_hint_label_ = lv_label_create(page1_);
+  // Portal hint — was parented to the printer plugin's main-dashboard page;
+  // now on lv_layer_top() like the rest of this shared overlay so it works
+  // regardless of which plugin (if any) owns the currently-settled page
+  // (Phase 4b/4c — see CLAUDE.md). Shown on any settled (non-scrolling) page
+  // now instead of only the printer's main dashboard.
+  portal_hint_label_ = lv_label_create(lv_layer_top());
   set_label_text_if_changed(portal_hint_label_, "");
   lv_obj_set_width(portal_hint_label_, 320);
   lv_label_set_long_mode(portal_hint_label_, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_text_align(portal_hint_label_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(portal_hint_label_, info20, 0);
+  lv_obj_set_style_text_font(portal_hint_label_, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(portal_hint_label_, lv_color_hex(0x64748B), 0);
   lv_obj_align(portal_hint_label_, LV_ALIGN_CENTER, 0, 114);
   lv_obj_add_flag(portal_hint_label_, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(portal_hint_label_);
 
   brightness_overlay_ = lv_label_create(lv_layer_top());
   set_label_text_if_changed(brightness_overlay_, "80%");
@@ -2707,127 +932,17 @@ esp_err_t Ui::build_dashboard() {
   lv_obj_set_style_text_font(portal_overlay_detail_, dosis20, 0);
   lv_obj_set_style_text_color(portal_overlay_detail_, lv_color_hex(0xCBD5E1), 0);
 
-  page2_shell_ = nullptr;
-
-  page2_image_ = lv_image_create(page2_);
-  lv_obj_set_size(page2_image_, kPage2PreviewSize, kPage2PreviewSize);
-  lv_image_set_inner_align(page2_image_, LV_IMAGE_ALIGN_CONTAIN);
-  lv_obj_align(page2_image_, LV_ALIGN_CENTER, 0, kPage2PreviewYOffset);
-  lv_obj_add_flag(page2_image_, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(page2_image_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(page2_image_, LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(page2_image_);
-
-  page2_note_ = lv_label_create(page2_);
-  set_label_text_if_changed(page2_note_, "No cover image yet");
-  lv_obj_set_width(page2_note_, 280);
-  lv_label_set_long_mode(page2_note_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page2_note_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page2_note_, dosis20, 0);
-  lv_obj_set_style_text_color(page2_note_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page2_note_, LV_ALIGN_CENTER, 0, -14);
-  enable_touch_bubble(page2_note_);
-
-  page2_subnote_ = lv_label_create(page2_);
-  set_label_text_if_changed(page2_subnote_, "");
-  lv_obj_set_width(page2_subnote_, 320);
-  lv_label_set_long_mode(page2_subnote_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page2_subnote_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page2_subnote_, info20, 0);
-  lv_obj_set_style_text_color(page2_subnote_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page2_subnote_, LV_ALIGN_CENTER, 0, 18);
-  lv_obj_add_flag(page2_subnote_, LV_OBJ_FLAG_HIDDEN);
-  enable_touch_bubble(page2_subnote_);
-
-  // Print-control buttons (pause/resume + stop). Only compiled in when the
-  // experimental print-control feature is enabled via Kconfig. See the help
-  // text of CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL for background on
-  // why this is opt-in. When disabled, page2_pause_button_/page2_stop_button_
-  // stay nullptr and update_print_buttons_locked() becomes a no-op.
-#if CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
-  auto style_print_button = [&](lv_obj_t* button, lv_color_t bg) {
-    lv_obj_set_size(button, 96, 64);
-    lv_obj_set_style_radius(button, 14, 0);
-    lv_obj_set_style_bg_color(button, bg, 0);
-    lv_obj_set_style_bg_opa(button, LV_OPA_90, 0);
-    lv_obj_set_style_border_color(button, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_border_opa(button, LV_OPA_30, 0);
-    lv_obj_set_style_border_width(button, 1, 0);
-    lv_obj_set_style_shadow_width(button, 0, 0);
-    lv_obj_set_style_pad_all(button, 0, 0);
-    lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(button, LV_OBJ_FLAG_HIDDEN);
-  };
-
-  page2_pause_button_ = lv_obj_create(page2_);
-  style_print_button(page2_pause_button_, lv_color_hex(0x1F6F4A));
-  lv_obj_align(page2_pause_button_, LV_ALIGN_CENTER, -64, 110);
-  lv_obj_add_event_cb(page2_pause_button_, &Ui::pause_button_event_cb, LV_EVENT_CLICKED, this);
-  page2_pause_button_label_ = lv_label_create(page2_pause_button_);
-  lv_obj_center(page2_pause_button_label_);
-  lv_obj_set_style_text_color(page2_pause_button_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(page2_pause_button_label_, info20, 0);
-  set_label_text_if_changed(page2_pause_button_label_, LV_SYMBOL_PAUSE);
-
-  page2_stop_button_ = lv_obj_create(page2_);
-  style_print_button(page2_stop_button_, lv_color_hex(0x8E2A2A));
-  lv_obj_align(page2_stop_button_, LV_ALIGN_CENTER, 64, 110);
-  // Stop requires a long press (~1.5 s default) to commit — guards against
-  // accidental cancellation. A short tap is intentionally a no-op.
-  lv_obj_add_event_cb(page2_stop_button_, &Ui::stop_button_event_cb, LV_EVENT_LONG_PRESSED, this);
-  page2_stop_button_label_ = lv_label_create(page2_stop_button_);
-  lv_obj_center(page2_stop_button_label_);
-  lv_obj_set_style_text_color(page2_stop_button_label_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(page2_stop_button_label_, info20, 0);
-  set_label_text_if_changed(page2_stop_button_label_, LV_SYMBOL_STOP);
-#endif  // CONFIG_INFOHUB_EXPERIMENTAL_PRINT_CONTROL
-
-  page3_image_ = lv_image_create(page3_);
-  lv_obj_set_size(page3_image_, board::kDisplayWidth, kPage3CameraHeight);
-  lv_image_set_inner_align(page3_image_, LV_IMAGE_ALIGN_CENTER);
-  lv_obj_align(page3_image_, LV_ALIGN_CENTER, 0, kPage3CameraYOffset);
-  lv_obj_add_flag(page3_image_, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_clear_flag(page3_image_, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_clear_flag(page3_image_, LV_OBJ_FLAG_SCROLLABLE);
-  enable_touch_bubble(page3_image_);
-
-  page3_note_ = lv_label_create(page3_);
-  set_label_text_if_changed(page3_note_, "Tap for new image");
-  lv_obj_set_width(page3_note_, 320);
-  lv_label_set_long_mode(page3_note_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page3_note_, LV_TEXT_ALIGN_CENTER, 0);
-  // Match the main-page status label (dosis32 / white) so the lifecycle status
-  // line on the camera page reads consistently across pages.
-  lv_obj_set_style_text_font(page3_note_, dosis32, 0);
-  lv_obj_set_style_text_color(page3_note_, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_align(page3_note_, LV_ALIGN_CENTER, 0, 0);
-  enable_touch_bubble(page3_note_);
-
-  page3_subnote_ = lv_label_create(page3_);
-  set_label_text_if_changed(page3_subnote_, "Auto-refresh every 2s");
-  lv_obj_set_width(page3_subnote_, 320);
-  lv_label_set_long_mode(page3_subnote_, LV_LABEL_LONG_WRAP);
-  lv_obj_set_style_text_align(page3_subnote_, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(page3_subnote_, info20, 0);
-  lv_obj_set_style_text_color(page3_subnote_, lv_color_hex(0x888888), 0);
-  lv_obj_align(page3_subnote_, LV_ALIGN_CENTER, 0, 28);
-  lv_obj_add_flag(page3_subnote_, LV_OBJ_FLAG_HIDDEN);
-  enable_touch_bubble(page3_subnote_);
-
-  register_page_slots();
-
   lv_obj_add_event_cb(screen_, &Ui::screen_event_cb, LV_EVENT_ALL, this);
   lv_obj_update_layout(ui_shell_.pager());
-  lv_obj_scroll_to_view(page1_, LV_ANIM_OFF);
 
-  active_page_ = kPageIdxMain;
+  // Default starting page is the pool's first page (index 0) — normally the
+  // first-registered plugin's first page. A content plugin that wants a
+  // different starting page (e.g. the printer plugin's main dashboard rather
+  // than its own page 0) calls set_active_page_by_plugin() once it finishes
+  // building, overriding this.
+  active_page_ = 0;
   scrolling_ = false;
   publish_page_state_snapshot();
-  deferred_snapshot_pending_ = false;
-  detail_visible_ = true;
-  show_logo_ = false;
-  preview_text_image_mode_ = false;
-  camera_text_image_mode_ = false;
   apply_page_visibility();
   update_portal_access_visuals_locked();
 
@@ -2836,51 +951,14 @@ esp_err_t Ui::build_dashboard() {
 
 void Ui::apply_page_visibility() {
   LvglLockGuard::note_phase("page_visibility");
-  // Page content labels are children of their respective page objects which live
-  // inside the horizontally-scrolling pager.  LVGL clips children that are
-  // outside the visible viewport, so we do NOT need to hide page-1/2/3 content
-  // during a scroll gesture.  Keeping them visible produces a smooth gallery-
-  // like swipe transition where the departing and arriving pages render side by
-  // side while the user's finger drags.
-  const bool on_page1 = !scrolling_ ? (active_page_ == kPageIdxMain) : true;
-  const bool on_page2 = !scrolling_ ? (active_page_ == kPageIdxPreview) : true;
-  const bool on_page3 = !scrolling_ ? (active_page_ == kPageIdxCamera) : true;
-  const bool settled_page1 = !scrolling_ && active_page_ == kPageIdxMain;
-  // These labels live on lv_layer_top(), so the pager cannot clip them.  The
-  // camera header uses the same position: on battery power (including while
-  // charging) show the battery indicator there; on USB-only power show the
-  // camera page's print status instead.
-  const bool show_battery_overlay =
-      (last_snapshot_.battery_present || last_snapshot_.charging) &&
-      (settled_page1 || (!scrolling_ && active_page_ == kPageIdxCamera));
-  const bool portal_hint_has_priority = portal_pin_active_ || portal_session_active_;
-  const bool show_portal_hint =
-      settled_page1 && !portal_hint_text_.empty() &&
-      (portal_hint_has_priority || !detail_visible_);
-
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    if (ams_pages_[u] != nullptr) {
-      set_hidden(ams_pages_[u], !ams_unit_present_[u]);
-    }
+  // Content-plugin widget visibility (which page's labels/images show) is
+  // entirely the registered plugin's own responsibility now (Phase 4b/4c —
+  // see CLAUDE.md) — Ui just fires the hook on every trigger that used to
+  // directly manipulate printer widgets (scroll begin/end, availability
+  // toggles). Overlay/parallax/portal below stay genuinely core.
+  if (page_visibility_cb_ != nullptr) {
+    page_visibility_cb_(page_visibility_cb_user_data_);
   }
-  set_hidden(page2_, !preview_page_available_);
-  set_hidden(page3_, !camera_page_available_);
-  set_hidden(status_label_, !on_page1);
-  set_hidden(detail_label_, !on_page1 || !detail_visible_ || show_portal_hint);
-  set_hidden(layer_row_, !on_page1);
-  set_hidden(battery_icon_label_, !show_battery_overlay);
-  set_hidden(battery_pct_label_, !show_battery_overlay);
-  set_hidden(nozzle_prefix_label_, !on_page1);
-  set_hidden(nozzle_value_label_, !on_page1);
-  set_hidden(nozzle_aux_label_, !on_page1 || !nozzle_aux_visible_);
-  set_hidden(bed_prefix_label_, !on_page1);
-  set_hidden(bed_value_label_, !on_page1);
-  set_hidden(bed_aux_label_, !on_page1 || !bed_aux_visible_);
-  set_hidden(remaining_row_, !on_page1);
-  set_hidden(badge_slot_, !on_page1);
-  set_hidden(portal_hint_label_, !show_portal_hint);
-  set_hidden(page2_image_, !on_page2 || !preview_image_visible_);
-  set_hidden(page3_image_, !on_page3 || !camera_image_visible_);
 
   // Overlay + page0 opacity are driven by apply_page0_parallax.
   // When not scrolling, snap to final state.
@@ -2888,133 +966,11 @@ void Ui::apply_page_visibility() {
     apply_page0_parallax(true);
   }
 
-  apply_logo_visibility();
   update_portal_access_visuals_locked();
 }
 
-void Ui::apply_logo_visibility() {
-  // badge_slot_ is a child of page1_ so it clips naturally during scroll.
-  const bool show_badge_slot = scrolling_ || active_page_ == kPageIdxMain;
-  if (!show_badge_slot) {
-    set_hidden(logo_badge_, true);
-    return;
-  }
-
-  set_hidden(logo_badge_, !show_logo_);
-}
-
-void Ui::update_page_availability_locked(const PrinterSnapshot& snapshot) {
-  // Printer-domain: while the printer plugin is disabled, nothing should
-  // re-derive AMS/preview/camera visibility from a snapshot. This is called
-  // not just from PrinterPlugin's own update_ui() (already gated at the
-  // Application level by Plugin::enabled()) but also from set_active_page()
-  // on every page swipe, which always re-applies last_snapshot_ regardless
-  // of which plugin's page is now active. Without this guard, a swipe while
-  // disabled resurrects camera_page_available_/preview_page_available_ from
-  // whatever last_snapshot_ held before disabling (or its default-
-  // constructed value if the plugin was never enabled this boot), unhiding
-  // the camera/preview pages even though set_printer_plugin_enabled(false)
-  // already hid them.
-  if (!printer_plugin_enabled_) {
-    return;
-  }
-  const bool preview_available = snapshot.preview_page_available;
-  const bool camera_available = snapshot.camera_page_available;
-  const uint8_t ams_count = snapshot.ams ? snapshot.ams->count : 0;
-  bool ams_changed = false;
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    const bool present = u < ams_count;
-    if (ams_unit_present_[u] != present) {
-      ams_unit_present_[u] = present;
-      ams_changed = true;
-    }
-  }
-  const bool availability_changed =
-      preview_page_available_ != preview_available || camera_page_available_ != camera_available ||
-      ams_changed;
-
-  preview_page_available_ = preview_available;
-  camera_page_available_ = camera_available;
-
-  if (!availability_changed) {
-    return;
-  }
-
-  hide_printer_content_pages_locked();
-}
-
-void Ui::hide_printer_content_pages_locked() {
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    if (ams_pages_[u] != nullptr) {
-      set_hidden(ams_pages_[u], !ams_unit_present_[u]);
-    }
-  }
-  set_hidden(page2_, !preview_page_available_);
-  set_hidden(page3_, !camera_page_available_);
-
-  if (!preview_page_available_) {
-    release_preview_image_locked();
-    preview_image_visible_ = false;
-  }
-
-  if (!camera_page_available_) {
-    if (camera_slot_initialized_ && page3_image_ != nullptr) {
-      lv_image_set_src(page3_image_, nullptr);
-    }
-    lv_image_cache_drop(&camera_image_dscs_[0]);
-    lv_image_cache_drop(&camera_image_dscs_[1]);
-    camera_blobs_[0].reset();
-    camera_blobs_[1].reset();
-    camera_slot_initialized_ = false;
-    active_camera_slot_ = 0;
-    last_camera_width_ = 0;
-    last_camera_height_ = 0;
-    std::memset(&camera_image_dscs_[0], 0, sizeof(camera_image_dscs_[0]));
-    std::memset(&camera_image_dscs_[1], 0, sizeof(camera_image_dscs_[1]));
-    camera_image_visible_ = false;
-  }
-
-  active_page_ = clamp_enabled_page(active_page_);
-  lv_obj_update_layout(ui_shell_.pager());
-  if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
-    lv_obj_scroll_to_view(target_page, LV_ANIM_OFF);
-  }
-  scrolling_ = false;
-  publish_page_state_snapshot();
-  apply_page0_parallax(true);
-  // Ring timer resume is handled by apply_ring_visual_locked via apply_snapshot.
-}
-
-void Ui::set_printer_plugin_enabled(bool enabled, uint32_t lock_timeout_ms) {
-  LvglLockGuard lock(lock_timeout_ms, "set_printer_plugin_enabled");
-  if (!lock.locked()) {
-    return;
-  }
-  printer_plugin_enabled_ = enabled;
-  set_hidden(page0_, !enabled);
-  set_hidden(page1_, !enabled);
-  if (enabled) {
-    // AMS/preview/camera availability re-populates (including their own
-    // set_hidden() calls) naturally on PrinterPlugin's next update_ui() tick
-    // (now resumed) via update_page_availability_locked().
-    active_page_ = clamp_enabled_page(active_page_);
-    publish_page_state_snapshot();
-    apply_page0_parallax(true);
-    apply_page_visibility();
-    update_no_plugins_overlay_locked();
-    return;
-  }
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    ams_unit_present_[u] = false;
-  }
-  preview_page_available_ = false;
-  camera_page_available_ = false;
-  hide_printer_content_pages_locked();
-  active_page_ = clamp_enabled_page(active_page_);
-  publish_page_state_snapshot();
-  apply_page0_parallax(true);
-  apply_page_visibility();
-  update_no_plugins_overlay_locked();
+void Ui::update_no_plugins_overlay_locked() {
+  set_hidden(no_plugins_overlay_, ui_shell_.any_page_enabled());
 }
 
 void Ui::reserve_plugin_page_pool(uint16_t total_pages) {
@@ -3027,50 +983,47 @@ int Ui::register_plugin_pages(const char* plugin_id, uint8_t count) {
     return -1;
   }
   const int base = ui_shell_.reserve_plugin_pages(plugin_id, count);
-  const int local_offset = base - kPageIdxGenericFirst;
-  if (local_offset < 0 || static_cast<uint16_t>(local_offset + count) > plugin_pool_size_) {
+  if (base < 0 || static_cast<uint16_t>(base + count) > plugin_pool_size_) {
     return base;
   }
   for (uint8_t i = 0; i < count; ++i) {
-    ui_shell_.register_page_slot(base + i, &plugin_pages_[local_offset + i],
-                                  &plugin_pages_enabled_[local_offset + i]);
+    ui_shell_.register_page_slot(base + i, &plugin_pages_[base + i], &plugin_pages_enabled_[base + i]);
   }
   return base;
 }
 
 lv_obj_t* Ui::plugin_page_container(int page_index) const {
-  const int local_offset = page_index - kPageIdxGenericFirst;
-  if (local_offset < 0 || static_cast<uint16_t>(local_offset) >= plugin_pool_size_) {
+  if (page_index < 0 || static_cast<uint16_t>(page_index) >= plugin_pool_size_) {
     return nullptr;
   }
-  return plugin_pages_[local_offset];
+  return plugin_pages_[page_index];
 }
 
-void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled, uint32_t lock_timeout_ms) {
-  LvglLockGuard lock(lock_timeout_ms, "set_plugin_pages_enabled");
-  if (!lock.locked()) {
-    return;
-  }
+lv_obj_t* Ui::plugin_page_container_for(const char* plugin_id, int local_idx) const {
   int base = 0;
   uint8_t count = 0;
-  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || count == 0) {
+  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || local_idx < 0 ||
+      local_idx >= static_cast<int>(count)) {
+    return nullptr;
+  }
+  return plugin_page_container(base + local_idx);
+}
+
+void Ui::set_plugin_page_available(const char* plugin_id, int local_idx, const bool* enabled_flag) {
+  int base = 0;
+  uint8_t count = 0;
+  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || local_idx < 0 ||
+      local_idx >= static_cast<int>(count) || enabled_flag == nullptr) {
     return;
   }
-  const int local_offset = base - kPageIdxGenericFirst;
-  if (local_offset < 0 || static_cast<uint16_t>(local_offset + count) > plugin_pool_size_) {
+  const int abs_idx = base + local_idx;
+  if (abs_idx < 0 || static_cast<uint16_t>(abs_idx) >= plugin_pool_size_) {
     return;
   }
-  bool changed = false;
-  for (uint8_t i = 0; i < count; ++i) {
-    if (plugin_pages_enabled_[local_offset + i] != enabled) {
-      plugin_pages_enabled_[local_offset + i] = enabled;
-      changed = true;
-    }
-    set_hidden(plugin_pages_[local_offset + i], !enabled);
-  }
-  if (!changed) {
-    return;
-  }
+  ui_shell_.register_page_slot(abs_idx, &plugin_pages_[abs_idx], enabled_flag);
+}
+
+void Ui::resettle_pager_after_availability_change() {
   active_page_ = clamp_enabled_page(active_page_);
   lv_obj_update_layout(ui_shell_.pager());
   if (lv_obj_t* target_page = page_object(active_page_); target_page != nullptr) {
@@ -3083,22 +1036,74 @@ void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled, uint32_t 
   update_no_plugins_overlay_locked();
 }
 
-void Ui::update_no_plugins_overlay_locked() {
-  set_hidden(no_plugins_overlay_, ui_shell_.any_page_enabled());
+void Ui::set_active_page_by_plugin(const char* plugin_id, int local_idx) {
+  int base = 0;
+  uint8_t count = 0;
+  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || local_idx < 0 ||
+      local_idx >= static_cast<int>(count)) {
+    return;
+  }
+  set_active_page(base + local_idx);
 }
 
-void Ui::register_page_slots() {
-  ui_shell_.register_page_slot(kPageIdxPrinterSelect, &page0_, &printer_plugin_enabled_);
-  for (int u = 0; u < kMaxAmsUnits; ++u) {
-    ui_shell_.register_page_slot(kPageIdxAmsFirst + u, &ams_pages_[u], &ams_unit_present_[u]);
+void Ui::set_plugin_pages_enabled(const char* plugin_id, bool enabled, uint32_t lock_timeout_ms) {
+  LvglLockGuard lock(lock_timeout_ms, "set_plugin_pages_enabled");
+  if (!lock.locked()) {
+    return;
   }
-  ui_shell_.register_page_slot(kPageIdxMain, &page1_, &printer_plugin_enabled_);
-  ui_shell_.register_page_slot(kPageIdxPreview, &page2_, &preview_page_available_);
-  ui_shell_.register_page_slot(kPageIdxCamera, &page3_, &camera_page_available_);
-  // Generic plugin pages register themselves individually via
-  // register_plugin_pages(), called once per plugin from Application after
-  // initialize() runs — not enumerated here since the set of plugins (and
-  // how many pages each wants) isn't known to Ui itself.
+  int base = 0;
+  uint8_t count = 0;
+  if (!ui_shell_.plugin_page_range(plugin_id, &base, &count) || count == 0) {
+    return;
+  }
+  if (base < 0 || static_cast<uint16_t>(base + count) > plugin_pool_size_) {
+    return;
+  }
+  bool changed = false;
+  for (uint8_t i = 0; i < count; ++i) {
+    if (plugin_pages_enabled_[base + i] != enabled) {
+      plugin_pages_enabled_[base + i] = enabled;
+      changed = true;
+    }
+    set_hidden(plugin_pages_[base + i], !enabled);
+  }
+  if (!changed) {
+    return;
+  }
+  resettle_pager_after_availability_change();
+}
+
+void Ui::register_page_visibility_callback(PluginPageCallback callback, void* user_data) {
+  page_visibility_cb_ = callback;
+  page_visibility_cb_user_data_ = user_data;
+}
+
+void Ui::register_page_settle_callback(PluginPageCallback callback, void* user_data) {
+  page_settle_cb_ = callback;
+  page_settle_cb_user_data_ = user_data;
+}
+
+void Ui::register_page_tap_callback(PluginPageCallback callback, void* user_data) {
+  page_tap_cb_ = callback;
+  page_tap_cb_user_data_ = user_data;
+}
+
+void Ui::set_battery_overlay_text(const std::string& icon_text, const std::string& pct_text) {
+  set_label_text_if_changed(battery_icon_label_, icon_text);
+  set_label_text_if_changed(battery_pct_label_, pct_text);
+}
+
+void Ui::set_battery_overlay_visible(bool visible) {
+  set_hidden(battery_icon_label_, !visible);
+  set_hidden(battery_pct_label_, !visible);
+}
+
+void Ui::update_battery_overlay(const PowerSnapshot& power) {
+  if (!power.available) {
+    return;
+  }
+  set_battery_overlay_text(battery_icon_text(power), battery_pct_text(power));
+  set_battery_overlay_visible(power.battery_present || power.charging);
 }
 
 lv_obj_t* Ui::page_object(int page) const { return ui_shell_.page_object(page); }
@@ -3127,23 +1132,17 @@ void Ui::set_active_page(int page) {
   if (clamped_page == 0 && previous_page != 0 && page0_reentry_cb_ != nullptr) {
     page0_reentry_cb_(page0_reentry_user_data_);
   }
-  if (active_page_ == kPageIdxPreview) {
-    preview_image_visible_ = ensure_preview_image_loaded_locked(false);
-  }
-  if (previous_page != clamped_page && active_page_ == kPageIdxCamera &&
-      camera_page_available_) {
-    std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-    camera_refresh_requested_ = true;
-  }
   scrolling_ = false;
   publish_page_state_snapshot();
   apply_page0_parallax(true);
-  // Ring timer resume is handled by apply_ring_visual_locked below.
   apply_page_visibility();
-  if (deferred_snapshot_pending_) {
-    apply_snapshot_locked(deferred_snapshot_, true);
-  } else if (previous_page != clamped_page) {
-    apply_snapshot_locked(last_snapshot_, true);
+  // Content-plugin full re-render on settle (replays deferred/last snapshot,
+  // preview-image-load-on-entry, camera-refresh-on-entry — all now the
+  // registered plugin's own responsibility, see printer_plugin_ui.cpp's
+  // on_page_settled()). Fired unconditionally, even landing back on the same
+  // page — a snapshot may have arrived mid-scroll and be waiting to apply.
+  if (page_settle_cb_ != nullptr) {
+    page_settle_cb_(page_settle_cb_user_data_);
   }
 }
 
@@ -3371,25 +1370,29 @@ void Ui::handle_screen_event(lv_event_t* event) {
 
     // Horizontal page swiping is handled by the LVGL pager (flex-row +
     // LV_SCROLL_SNAP_NONE → handle_pager_event snaps to nearest page on SCROLL_END).
-    // Only handle taps here (camera refresh on page 3).
-    if (active_page_ == kPageIdxCamera && camera_page_available_ && abs_dx < 12 && abs_dy < 12) {
-      std::lock_guard<std::mutex> lock(camera_refresh_mutex_);
-      camera_refresh_requested_ = true;
+    // Only handle plain taps here — content-plugin-specific (e.g. camera
+    // refresh on the printer plugin's camera page) via the registered tap
+    // callback, generic here.
+    if (abs_dx < 12 && abs_dy < 12 && page_tap_cb_ != nullptr) {
+      page_tap_cb_(page_tap_cb_user_data_);
     }
   }
 }
 
 void Ui::update_portal_access_visuals_locked() {
-  const bool show_page1 = !scrolling_ && active_page_ == kPageIdxMain;
+  // Simplified (Phase 4b/4c — see CLAUDE.md): no longer restricted to "the
+  // printer plugin's main dashboard is the settled page," and no longer
+  // yields to a content plugin's own detail label (that coupling required
+  // Ui to reach into printer-owned widget state directly, which is exactly
+  // what this phase removes) — shows on any settled page whenever the PIN
+  // lock or an active session actually needs the user's attention.
   const bool portal_hint_has_priority = portal_pin_active_ || portal_session_active_;
-  const bool show_hint = portal_hint_label_ != nullptr && show_page1 && !portal_hint_text_.empty() &&
-                         (portal_hint_has_priority || !detail_visible_);
+  const bool show_hint = portal_hint_label_ != nullptr && !scrolling_ &&
+                         !portal_hint_text_.empty() && portal_hint_has_priority;
+  portal_hint_currently_shown_ = show_hint;
   set_hidden(portal_hint_label_, !show_hint);
   if (show_hint) {
     set_label_text_if_changed(portal_hint_label_, portal_hint_text_);
-    set_hidden(detail_label_, true);
-  } else if (detail_label_ != nullptr && show_page1 && detail_visible_) {
-    set_hidden(detail_label_, false);
   }
 
   const bool show_overlay = portal_overlay_card_ != nullptr && portal_pin_active_;
@@ -3403,95 +1406,6 @@ void Ui::update_portal_access_visuals_locked() {
   set_label_text_if_changed(portal_overlay_detail_, portal_overlay_detail_text_);
 }
 
-void Ui::handle_logo_event(lv_event_t* event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
-    return;
-  }
-
-  if (scrolling_ || !show_logo_ || !last_snapshot_.chamber_light_supported) {
-    return;
-  }
-
-  note_activity(false);
-  chamber_light_toggle_requested_.store(true);
-}
-
-void Ui::handle_pause_button_event(lv_event_t* event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) {
-    return;
-  }
-  if (scrolling_) {
-    return;
-  }
-  // Translate the tap based on the current lifecycle: Printing -> pause,
-  // Paused -> resume. Preparing/Idle/Finished/Error don't expose the button.
-  PrintCommand command = PrintCommand::kNone;
-  switch (last_snapshot_.lifecycle) {
-    case PrintLifecycleState::kPrinting:
-    case PrintLifecycleState::kPreparing:
-      command = PrintCommand::kPause;
-      break;
-    case PrintLifecycleState::kPaused:
-      command = PrintCommand::kResume;
-      break;
-    default:
-      return;
-  }
-  note_activity(false);
-  print_command_request_.store(static_cast<uint8_t>(command));
-}
-
-void Ui::handle_stop_button_event(lv_event_t* event) {
-  if (lv_event_get_code(event) != LV_EVENT_LONG_PRESSED) {
-    return;
-  }
-  if (scrolling_) {
-    return;
-  }
-  // Stop is only meaningful while a job exists (printing / paused / preparing).
-  switch (last_snapshot_.lifecycle) {
-    case PrintLifecycleState::kPrinting:
-    case PrintLifecycleState::kPaused:
-    case PrintLifecycleState::kPreparing:
-      break;
-    default:
-      return;
-  }
-  note_activity(false);
-  print_command_request_.store(static_cast<uint8_t>(PrintCommand::kStop));
-}
-
-void Ui::update_print_buttons_locked(const PrinterSnapshot& snapshot) {
-  if (page2_pause_button_ == nullptr || page2_stop_button_ == nullptr) {
-    return;
-  }
-  // Only show controls on the cloud/hybrid Preview page when a job is active.
-  const bool job_active = snapshot.lifecycle == PrintLifecycleState::kPrinting ||
-                          snapshot.lifecycle == PrintLifecycleState::kPaused ||
-                          snapshot.lifecycle == PrintLifecycleState::kPreparing;
-  const bool show = snapshot.preview_page_available && job_active;
-  set_hidden(page2_pause_button_, !show);
-  set_hidden(page2_stop_button_, !show);
-  if (!show) {
-    return;
-  }
-
-  // Pause button glyph follows lifecycle: paused -> play (resume), else pause.
-  const bool show_play_glyph = snapshot.lifecycle == PrintLifecycleState::kPaused;
-  set_label_text_if_changed(page2_pause_button_label_,
-                            show_play_glyph ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
-
-  // Visually disable both buttons while a command is in flight (avoid double-fire
-  // until the printer reflects the new lifecycle in its next status report).
-  const bool pending = snapshot.print_command_pending_kind != PrintCommand::kNone;
-  const lv_opa_t pause_opa = pending ? LV_OPA_40 : LV_OPA_90;
-  lv_obj_set_style_bg_opa(page2_pause_button_, pause_opa, 0);
-  lv_obj_set_style_bg_opa(page2_stop_button_, pause_opa, 0);
-}
-
-// Phase 6/9: dimming/brightness/power-save logic moved to UiShell. These
-// stay as thin delegates so the many printer-content call sites in this
-// file (note_activity in particular) don't need touching.
 void Ui::note_activity(bool wake_display_now) { ui_shell_.note_activity(wake_display_now); }
 
 void Ui::request_wake_display() { ui_shell_.note_activity(true); }
@@ -3518,45 +1432,6 @@ void Ui::screen_event_cb(lv_event_t* event) {
   if (ui != nullptr) {
     ui->handle_screen_event(event);
   }
-}
-
-void Ui::logo_event_cb(lv_event_t* event) {
-  auto* ui = static_cast<Ui*>(lv_event_get_user_data(event));
-  if (ui != nullptr) {
-    ui->handle_logo_event(event);
-  }
-}
-
-void Ui::pause_button_event_cb(lv_event_t* event) {
-  auto* ui = static_cast<Ui*>(lv_event_get_user_data(event));
-  if (ui != nullptr) {
-    ui->handle_pause_button_event(event);
-  }
-}
-
-void Ui::stop_button_event_cb(lv_event_t* event) {
-  auto* ui = static_cast<Ui*>(lv_event_get_user_data(event));
-  if (ui != nullptr) {
-    ui->handle_stop_button_event(event);
-  }
-}
-
-void Ui::remaining_row_event_cb(lv_event_t* event) {
-  auto* ui = static_cast<Ui*>(lv_event_get_user_data(event));
-  if (ui != nullptr) {
-    ui->handle_remaining_row_click();
-  }
-}
-
-void Ui::handle_remaining_row_click() {
-  if (scrolling_) {
-    return;
-  }
-  // We are inside an LVGL event \u2014 the lvgl_port task already holds the
-  // display lock, so no extra locking is needed before mutating widgets.
-  show_eta_ = !show_eta_;
-  // Re-apply the cached snapshot so the row updates immediately.
-  apply_snapshot_locked(last_snapshot_, false);
 }
 
 }  // namespace infohub

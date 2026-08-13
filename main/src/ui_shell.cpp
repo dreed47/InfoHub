@@ -81,12 +81,12 @@ int UiShell::clamp_enabled_page(int page) const {
 }
 
 void UiShell::configure_generic_page_pool(uint16_t total_pages) {
-  page_slots_.resize(static_cast<size_t>(kPageIdxGenericFirst) + total_pages);
+  page_slots_.resize(total_pages);
 }
 
 int UiShell::reserve_plugin_pages(const char* plugin_id, uint8_t count) {
-  const int base = kPageIdxGenericFirst + next_generic_offset_;
-  next_generic_offset_ = static_cast<uint16_t>(next_generic_offset_ + count);
+  const int base = next_pool_offset_;
+  next_pool_offset_ = static_cast<uint16_t>(next_pool_offset_ + count);
   if (plugin_page_range_count_ < plugin_page_ranges_.size()) {
     plugin_page_ranges_[plugin_page_range_count_++] = {plugin_id, base, count};
   }

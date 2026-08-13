@@ -77,6 +77,7 @@ void wait_for_next_iteration(Ui& ui, TickType_t delay) {
 Application::Application()
     : setup_portal_(config_store_, wifi_manager_, ui_, pmu_manager_, audio_notifier_),
       serial_provisioner_(config_store_, wifi_manager_) {
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   printer_plugin_.cloud_client().set_config_store(&config_store_);
   // Route printer online/offline events from the Bambu Cloud MQTT feed to the
   // local PrinterClient so it can collapse its reconnect backoff the moment the
@@ -86,6 +87,7 @@ Application::Application()
     printer_plugin_.printer_client().notify_cloud_presence(online);
   });
   plugins_[0] = &printer_plugin_;
+#endif
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   plugins_[1] = &weather_plugin_;
 #endif
@@ -171,14 +173,15 @@ void Application::run() {
 
   // Every compiled-in plugin's generic-page-pool size must be known before
   // ui_.initialize() builds the pager, so the pool's LVGL containers can be
-  // created up front alongside every other page. PrinterPlugin doesn't
-  // participate (page_count() stays 0 — its pages predate this pool and stay
-  // Ui-hardcoded), so this only sums weather/stocks/future-plugin counts.
+  // created up front alongside every other page. Printer is a real, uniform
+  // pool entry like every other plugin as of Phase 4b/4c -- no more special
+  // exclusion here.
   uint16_t plugin_page_total = 0;
   for (Plugin* plugin : plugins_) {
-    if (plugin != nullptr) {
-      plugin_page_total = static_cast<uint16_t>(plugin_page_total + plugin->page_count());
+    if (plugin == nullptr) {
+      continue;
     }
+    plugin_page_total = static_cast<uint16_t>(plugin_page_total + plugin->page_count());
   }
   ui_.reserve_plugin_page_pool(plugin_page_total);
 
@@ -194,8 +197,9 @@ void Application::run() {
   }
 
   // build_screen() runs after init() so plugins that need their own
-  // core-service refs (e.g. PrinterPlugin::ui_) have them set first.
-  printer_plugin_.build_screen(ui_.printer_select_page_container(), 0);
+  // core-service refs (e.g. PrinterPlugin::ui_) have them set first. Printer
+  // now flows through this same generic loop (page_count()==8) instead of a
+  // special-cased call outside it.
   for (Plugin* plugin : plugins_) {
     if (plugin == nullptr) {
       continue;
@@ -230,6 +234,10 @@ void Application::run() {
                             wifi_manager_.is_setup_access_point_active(),
                             wifi_manager_.station_ip());
     ui_.update_portal_access_visuals();
+    // Battery overlay is core (PmuManager-driven, not any plugin's data) --
+    // refreshed here so it works even with every plugin disabled. A plugin
+    // may still refine visibility further in its own update_ui() below.
+    ui_.update_battery_overlay(pmu_manager_.sample());
 
     for (Plugin* plugin : plugins_) {
       if (plugin == nullptr || !plugin->enabled()) {

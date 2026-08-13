@@ -32,10 +32,17 @@ if(CONFIG_INFOHUB_PLUGIN_PRINTER)
         "src/plugins/printer/error_lookup.cpp"
         "src/plugins/printer/printer_plugin.cpp"
         "src/plugins/printer/printer_plugin_portal.cpp"
+        "src/plugins/printer/printer_plugin_ui.cpp"
         "src/plugins/printer/p1s_camera_client.cpp"
         "src/plugins/printer/printer_client.cpp"
         "src/plugins/printer/printer_state.cpp"
         "src/plugins/printer/status_resolver.cpp"
+        # bambuicon (logo) / dosis_32 / mdi_40 are printer-content-only as of
+        # Phase 4b/4c — moved out of the unconditional font/image asset list
+        # below, into here.
+        "include/img/bambuicon.c"
+        "include/font/dosis_32.c"
+        "include/font/mdi_40.c"
     )
     list(APPEND INFOHUB_PLUGIN_EMBED_TXTFILES
         "include/infohub/plugins/printer/bambu.cert"

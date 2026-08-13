@@ -7,7 +7,6 @@
 
 #include "lvgl.h"
 #include "infohub/config_store.hpp"
-#include "infohub/plugins/printer/printer_state.hpp"
 
 namespace infohub {
 
@@ -18,36 +17,22 @@ enum class ScreenPowerMode : uint8_t {
 };
 
 // Phase 6/9 continuation of the plugin-architecture extraction (see CLAUDE.md
-// "Ui changes sketch"). UiShell owns the chrome mechanics that don't need
-// PrinterSnapshot: page-index bookkeeping (register_page_slot() stands in for
-// the sketch's eventual multi-plugin register_pages()) and the dimming/
-// brightness/power-save state machine. Ui still owns all LVGL object
-// construction and every printer-content concern; it calls into UiShell
-// through thin delegating methods so this is a state/logic relocation, not
-// an API change — Application's calls to Ui are completely unaffected.
+// "Ui changes sketch"). UiShell owns the chrome mechanics: page-index
+// bookkeeping (register_page_slot()/reserve_plugin_pages(), a real generic
+// multi-plugin page pool as of Phase 4b/4c — every compiled-in plugin,
+// printer included, is a uniform pool entry, no fixed/hardcoded slots) and
+// the dimming/brightness/power-save state machine. Ui owns all LVGL object
+// construction; content-owning plugins (only PrinterPlugin today) own their
+// own widgets entirely — UiShell/Ui hold zero PrinterSnapshot or other
+// plugin-content type references.
 //
-// NOT moved here (deliberately, see CLAUDE.md's phased sequencing notes):
-// active_page_/scrolling_/scroll_origin_page_ and the portal PIN overlay.
-// Both are read by dozens of printer-content call sites (apply_snapshot_locked
-// alone touches active_page_/scrolling_ ~15 times) or coupled to
-// PrinterSnapshot fields (compute_portal_texts_locked reads
-// last_snapshot_.setup_ap_active/connection) — moving them needs a real
-// design decision (a content-facing query API, or resolving the "does page 0
-// become a plugin carousel" open question first), not a rename.
+// NOT moved here (deliberately): active_page_/scrolling_/scroll_origin_page_
+// and the portal PIN overlay stay on Ui — they're read by Ui's own chrome
+// (gesture handling, parallax, portal hint) and by the generic
+// is_plugin_page_active()/is_plugin_page_visible() query API content plugins
+// use, not by anything UiShell itself needs to compute.
 class UiShell {
  public:
-  static constexpr int kPageIdxPrinterSelect = 0;
-  static constexpr int kPageIdxAmsFirst = 1;
-  static constexpr int kPageIdxAmsLast = kPageIdxAmsFirst + kMaxAmsUnits - 1;
-  static constexpr int kPageIdxMain = kPageIdxAmsLast + 1;
-  static constexpr int kPageIdxPreview = kPageIdxMain + 1;
-  static constexpr int kPageIdxCamera = kPageIdxMain + 2;
-  // Fixed core pages end at kPageIdxCamera. Beyond that is a generic pool of
-  // plugin-owned pages, sized exactly to the sum of every compiled-in
-  // plugin's declared Plugin::page_count() — no plugin gets a hardcoded slot
-  // here by name. See configure_generic_page_pool()/reserve_plugin_pages().
-  static constexpr int kPageIdxGenericFirst = kPageIdxCamera + 1;
-
   // --- Page registry: page_enabled()/page_object() table, see Phase 6 ---
   void register_page_slot(int index, lv_obj_t* const* object, const bool* enabled_flag);
   bool page_enabled(int page) const;
@@ -59,17 +44,17 @@ class UiShell {
   // decide whether the pager has anything to show at all, vs. every plugin
   // having been disabled in Web Config.
   bool any_page_enabled() const;
-  // Highest valid kPageIdx-space index currently registered (core pages +
-  // however many generic pages configure_generic_page_pool() reserved).
+  // Highest valid page-pool index currently registered.
   int last_page_index() const { return static_cast<int>(page_slots_.size()) - 1; }
 
-  // Resizes the page-slot table to fit `total_pages` generic plugin pages
-  // beyond the fixed core set. Call once, before any reserve_plugin_pages()
-  // call — Ui does this right after construction, before initialize().
+  // Resizes the page-slot table to fit `total_pages` — the sum of every
+  // compiled-in plugin's Plugin::page_count(). Call once, before any
+  // reserve_plugin_pages() call — Ui does this right after construction,
+  // before initialize().
   void configure_generic_page_pool(uint16_t total_pages);
-  // Assigns `count` consecutive generic-pool indices to `plugin_id`, in call
-  // order (first plugin to call this gets kPageIdxGenericFirst, etc).
-  // Returns the base kPageIdx-space index (>= kPageIdxGenericFirst).
+  // Assigns `count` consecutive pool indices to `plugin_id`, in call order
+  // (first plugin to call this gets base index 0, etc). Returns the base
+  // index.
   int reserve_plugin_pages(const char* plugin_id, uint8_t count);
   // Looks up a previously-reserved range by plugin id — e.g. so an
   // enable/disable toggle can find which slots are "mine" without the
@@ -107,13 +92,14 @@ class UiShell {
     lv_obj_t* const* object = nullptr;
     const bool* enabled_flag = nullptr;
   };
-  // Pre-sized to the fixed core pages; configure_generic_page_pool() extends
-  // it once with however many generic plugin pages are actually needed.
-  std::vector<PageSlot> page_slots_ = std::vector<PageSlot>(kPageIdxGenericFirst);
+  // Empty until configure_generic_page_pool() sizes it to the sum of every
+  // compiled-in plugin's page_count() — no fixed/hardcoded slots (Phase
+  // 4b/4c, see CLAUDE.md).
+  std::vector<PageSlot> page_slots_{};
   lv_obj_t* pager_ = nullptr;
   bool pager_scroll_locked_ = false;
 
-  uint16_t next_generic_offset_ = 0;
+  uint16_t next_pool_offset_ = 0;
   static constexpr uint8_t kMaxPluginPageRanges = 8;
   struct PluginPageRange {
     const char* id = nullptr;

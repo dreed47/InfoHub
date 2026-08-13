@@ -6,12 +6,14 @@
 #include "infohub/config_store.hpp"
 #include "infohub/plugin.hpp"
 #include "infohub/pmu.hpp"
-#include "infohub/plugins/printer/printer_plugin.hpp"
 #include "infohub/setup_portal.hpp"
 #include "infohub/serial_provisioner.hpp"
 #include "infohub/ui.hpp"
 #include "infohub/wifi_manager.hpp"
 #include "freertos/FreeRTOS.h"
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
+#include "infohub/plugins/printer/printer_plugin.hpp"
+#endif
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
 #include "infohub/plugins/weather/weather_plugin.hpp"
 #endif
@@ -36,9 +38,9 @@ class Application {
   Ui ui_{};
   PmuManager pmu_manager_{};
   AudioNotifier audio_notifier_{};
-  // Declared before setup_portal_ so its clients exist first — SetupPortal's
-  // constructor still takes direct client references (Phase 8d, deferred).
+#if CONFIG_INFOHUB_PLUGIN_PRINTER
   PrinterPlugin printer_plugin_{};
+#endif
 #if CONFIG_INFOHUB_PLUGIN_WEATHER
   WeatherPlugin weather_plugin_{};
 #endif

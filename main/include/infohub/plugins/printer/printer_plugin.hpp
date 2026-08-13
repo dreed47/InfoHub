@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -23,13 +25,16 @@ namespace infohub {
 // consolidated all of this logic into those three methods, so this phase is
 // "move the method," not "redesign the logic."
 //
-// register_portal_routes()/portal_settings_html()/build_tile()/
-// build_screen() stay no-ops — SetupPortal's printer-domain routes
-// (handle_cloud_connect, handle_local_connect, handle_printers_*, etc.) and
-// Ui's printer-content code (AMS/arc/camera/preview pages) are still owned
-// directly by SetupPortal/Ui. Moving those is Phase 8c/8d, deferred: both
-// need UiShell's register_pages() to become a real multi-plugin API first,
-// which isn't designed yet.
+// Phase 4b/4c: PrinterPlugin now also owns every AMS/main-dashboard/preview/
+// camera widget and its rendering logic (moved out of Ui — see
+// main/src/plugins/printer/printer_plugin_ui.cpp). Ui knows nothing about
+// PrinterSnapshot or any printer-specific widget; the connective tissue is a
+// small set of generic hooks on Ui (register_page_visibility_callback(),
+// register_page_settle_callback(), register_page_tap_callback(),
+// set_plugin_page_available(), set_battery_overlay_text(),
+// set_active_page_by_plugin(), request_chamber_light_toggle(),
+// request_print_command()) that any content-owning plugin could use, not
+// just this one.
 class PrinterPlugin : public Plugin {
  public:
   PrinterPlugin() = default;
@@ -52,8 +57,15 @@ class PrinterPlugin : public Plugin {
   uint32_t desired_poll_interval_ms() const override;
 
   void build_tile(lv_obj_t*) override {}
-  // Builds the printer-selector page0 content (title/card list/empty note)
-  // into the container Ui hands out via printer_select_page_container().
+  // 1 (printer-selector) + kMaxAmsUnits (AMS unit pages) + 3 (main/preview/
+  // camera) = 8. Flows through Application's generic per-plugin
+  // build_screen()/register_plugin_pages() loop exactly like weather/stocks
+  // (Phase 4b/4c retired the Phase 4a transitional pool special-case).
+  uint8_t page_count() const override {
+    return static_cast<uint8_t>(1 + kMaxAmsUnits + 3);
+  }
+  // Builds all 8 local pages: 0=printer-selector, 1..kMaxAmsUnits=AMS units,
+  // kMaxAmsUnits+1=main dashboard, +2=preview, +3=camera.
   void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
   std::string portal_settings_html() const override { return {}; }
@@ -138,12 +150,176 @@ class PrinterPlugin : public Plugin {
   static void replay_card_animations_trampoline(void* user_data);
   static void printer_card_click_cb(lv_event_t* event);
 
+  // --- Phase 4b/4c: moved from Ui (main/src/plugins/printer/printer_plugin_ui.cpp) ---
+  void build_main_dashboard_page(lv_obj_t* parent);
+  void build_preview_page(lv_obj_t* parent);
+  void build_camera_page(lv_obj_t* parent);
+  void build_ams_page(int unit_idx);
+  void render_ams_unit(int unit_idx, const PrinterSnapshot& snapshot, bool show_unit_label);
+  void compute_ams_tray_errors(const PrinterSnapshot& snapshot);
+  static void ams_error_pulse_timer_cb(lv_timer_t* timer);
+  void apply_ams_error_pulse_locked();
+  bool ensure_preview_image_loaded_locked(
+      bool force_reload,
+      std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw = nullptr,
+      const lv_image_dsc_t* pre_decoded_dsc = nullptr);
+  void release_preview_image_locked();
+  void apply_snapshot_locked(const PrinterSnapshot& snapshot, bool force_ring_refresh,
+                             std::shared_ptr<std::vector<uint8_t>> pre_decoded_raw = nullptr,
+                             const lv_image_dsc_t* pre_decoded_dsc = nullptr);
+  void update_page_availability_locked(const PrinterSnapshot& snapshot);
+  // Shared by update_page_availability_locked() (snapshot-driven) and
+  // the enabled-toggle path (immediate, no snapshot available) — hides
+  // ams_pages_/page2_/page3_, releases preview/camera image resources.
+  void hide_printer_content_pages_locked();
+  // Umbrella enable/disable — mirrors the old Ui::set_printer_plugin_enabled().
+  // Disabling resets this plugin's own AMS/preview/camera availability state
+  // and hides its widgets before telling Ui to hide the whole page range;
+  // enabling just tells Ui to show the range (this plugin's own update_ui()
+  // repopulates AMS/preview/camera availability from the next snapshot).
+  void apply_enabled_state_to_ui(bool enabled_now, uint32_t lock_timeout_ms);
+  void update_print_buttons_locked(const PrinterSnapshot& snapshot);
+  static void pause_button_event_cb(lv_event_t* event);
+  static void stop_button_event_cb(lv_event_t* event);
+  void handle_pause_button_event(lv_event_t* event);
+  void handle_stop_button_event(lv_event_t* event);
+  static void remaining_row_event_cb(lv_event_t* event);
+  void handle_remaining_row_click();
+  static void logo_event_cb(lv_event_t* event);
+  void handle_logo_event(lv_event_t* event);
+  // Visibility-only refresh (no snapshot re-render) — registered with Ui via
+  // register_page_visibility_callback() so chrome-triggered refreshes (page
+  // scroll begin, availability toggles) still show/hide this plugin's
+  // widgets instantly without waiting for the next update_ui() tick.
+  void refresh_page_visibility();
+  static void refresh_page_visibility_trampoline(void* user_data);
+  // Full re-render on page settle (registered via register_page_settle_callback()) —
+  // replays the deferred/last snapshot, mirroring the pre-4b/4c
+  // Ui::set_active_page() tail.
+  void on_page_settled();
+  static void on_page_settled_trampoline(void* user_data);
+  // Tap-to-refresh-camera (registered via register_page_tap_callback()).
+  void on_page_tapped();
+  static void on_page_tapped_trampoline(void* user_data);
+
   lv_obj_t* title_ = nullptr;
   lv_obj_t* card_list_ = nullptr;
   lv_obj_t* empty_note_ = nullptr;
   std::vector<PrinterCardWidgets> page0_cards_;
   std::vector<PrinterCardInfo> last_printer_cards_;  // change-detection cache
   int pending_printer_switch_ = -1;
+
+  // --- AMS pages (local indices 1..kMaxAmsUnits) ---
+  // One page per AMS unit. ams_pages_[0] additionally hosts the external-spool
+  // widgets (which dynamically shrink the AMS visualization). Pages 1..3 do
+  // not host the external spool.
+  lv_obj_t* ams_pages_[kMaxAmsUnits] = {};
+  lv_obj_t* ams_unit_label_[kMaxAmsUnits] = {};   // "AMS 1/2/3/4" header (only when count>1)
+  lv_obj_t* ams_tray_row_[kMaxAmsUnits] = {};
+  lv_obj_t* ams_tray_col_[kMaxAmsUnits][kMaxAmsTrays] = {};
+  lv_obj_t* ams_tray_rect_[kMaxAmsUnits][kMaxAmsTrays] = {};
+  lv_obj_t* ams_tray_fill_[kMaxAmsUnits][kMaxAmsTrays] = {};   // dark overlay for empty portion
+  lv_obj_t* ams_tray_pct_[kMaxAmsUnits][kMaxAmsTrays] = {};    // percentage label inside rect
+  lv_obj_t* ams_tray_type_[kMaxAmsUnits][kMaxAmsTrays] = {};
+  lv_obj_t* ams_tray_arrow_[kMaxAmsUnits][kMaxAmsTrays] = {};  // triangle indicator below pill
+  lv_obj_t* ams_shelf_[kMaxAmsUnits] = {};                     // gray shelf behind upper pills
+  lv_obj_t* ams_base_[kMaxAmsUnits] = {};                      // dark base behind lower pills
+  lv_obj_t* ams_humidity_drop_[kMaxAmsUnits] = {};
+  lv_obj_t* ams_humidity_label_[kMaxAmsUnits] = {};
+  lv_obj_t* ams_temp_label_[kMaxAmsUnits] = {};
+  lv_obj_t* ams_note_[kMaxAmsUnits] = {};
+  // Per-tray HMS/Error indicator state (true → pill gets diamond overlay,
+  // arrow shows pulsating red triangle).
+  bool ams_tray_error_[kMaxAmsUnits][kMaxAmsTrays] = {};
+  // External spool widgets (only on ams_pages_[0]).
+  lv_obj_t* ams_ext_col_ = nullptr;
+  lv_obj_t* ams_ext_rect_ = nullptr;
+  lv_obj_t* ams_ext_type_ = nullptr;
+  lv_obj_t* ams_ext_mat_ = nullptr;
+  lv_obj_t* ams_ext_arrow_ = nullptr;
+  bool ams_ext_spool_shown_ = false;
+  // Per-page availability (true if this AMS unit is present on the printer).
+  bool ams_unit_present_[kMaxAmsUnits] = {};
+  // Pulse animation state for error indicators (single shared timer).
+  lv_timer_t* ams_error_pulse_timer_ = nullptr;
+  uint32_t ams_error_pulse_phase_ = 0;
+
+  // --- Main dashboard (local index kMaxAmsUnits+1) ---
+  lv_obj_t* badge_slot_ = nullptr;
+  lv_obj_t* logo_badge_ = nullptr;
+  lv_obj_t* logo_image_ = nullptr;
+  lv_obj_t* status_label_ = nullptr;
+  lv_obj_t* detail_label_ = nullptr;
+  lv_obj_t* layer_label_ = nullptr;
+  lv_obj_t* layer_row_ = nullptr;
+  lv_obj_t* filament_icon_label_ = nullptr;
+  lv_obj_t* filament_value_label_ = nullptr;
+  lv_obj_t* nozzle_prefix_label_ = nullptr;
+  lv_obj_t* nozzle_value_label_ = nullptr;
+  lv_obj_t* nozzle_aux_label_ = nullptr;
+  lv_obj_t* bed_prefix_label_ = nullptr;
+  lv_obj_t* bed_value_label_ = nullptr;
+  lv_obj_t* bed_aux_label_ = nullptr;
+  lv_obj_t* remaining_prefix_label_ = nullptr;
+  lv_obj_t* remaining_label_ = nullptr;
+  lv_obj_t* remaining_row_ = nullptr;
+
+  // --- Preview page (local index kMaxAmsUnits+2) ---
+  lv_obj_t* page2_image_ = nullptr;
+  lv_obj_t* page2_note_ = nullptr;
+  lv_obj_t* page2_subnote_ = nullptr;
+  // Print-control buttons on the preview page. Visible while a job is in
+  // Printing/Paused/Preparing state. The pause button toggles between
+  // pause/resume based on lifecycle. The stop button requires LV_EVENT_LONG_PRESSED
+  // (~1.5s hold) so a stray tap can't kill a print.
+  lv_obj_t* page2_pause_button_ = nullptr;
+  lv_obj_t* page2_pause_button_label_ = nullptr;
+  lv_obj_t* page2_stop_button_ = nullptr;
+  lv_obj_t* page2_stop_button_label_ = nullptr;
+
+  // --- Camera page (local index kMaxAmsUnits+3) ---
+  lv_obj_t* page3_image_ = nullptr;
+  lv_obj_t* page3_note_ = nullptr;
+  lv_obj_t* page3_subnote_ = nullptr;
+
+  bool detail_visible_ = true;
+  bool show_logo_ = false;
+  bool preview_page_available_ = true;
+  bool preview_image_visible_ = false;
+  bool preview_text_image_mode_ = false;
+  bool camera_page_available_ = true;
+  bool camera_image_visible_ = false;
+  bool camera_text_image_mode_ = false;
+  bool nozzle_aux_visible_ = false;
+  bool bed_aux_visible_ = false;
+  // Toggled by tapping the remaining-time row on page1: when true the row
+  // shows the predicted finish wall-clock time instead of the remaining
+  // duration. The clock-icon prefix is hidden in ETA mode to make room.
+  bool show_eta_ = false;
+  bool logo_clickable_ = false;
+  bool logo_recolor_enabled_ = false;
+  uint32_t logo_recolor_hex_ = 0;
+  uint32_t last_rendered_ams_signature_ = UINT32_MAX;
+  std::string last_ui_status_;
+  bool last_print_active_ = false;
+  std::string last_diag_status_;
+  std::string last_diag_detail_;
+  std::string last_diag_stage_;
+  lv_image_dsc_t preview_image_dsc_{};
+  std::shared_ptr<std::vector<uint8_t>> last_preview_blob_{};
+  std::shared_ptr<std::vector<uint8_t>> last_preview_raw_{};
+  lv_image_dsc_t camera_image_dscs_[2]{};
+  std::shared_ptr<std::vector<uint8_t>> camera_blobs_[2]{};
+  uint8_t active_camera_slot_ = 0;
+  bool camera_slot_initialized_ = false;
+  uint16_t last_camera_width_ = 0;
+  uint16_t last_camera_height_ = 0;
+  bool deferred_snapshot_pending_ = false;
+  PrinterSnapshot deferred_snapshot_{};
+  PrinterSnapshot last_snapshot_{};
+  mutable std::mutex camera_refresh_mutex_{};
+  bool camera_refresh_requested_ = false;
+  bool consume_camera_refresh_request();
 
   // Core service references, captured during init(). Plugin is default-
   // constructed as an Application member before init() runs, so these start
