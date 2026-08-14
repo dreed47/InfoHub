@@ -1,7 +1,9 @@
 #include "infohub/plugins/stocks/stock_client.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdlib>
+#include <ctime>
 
 #include "cJSON.h"
 #include "esp_http_client.h"
@@ -28,6 +30,84 @@ constexpr char kUrlPrefix[] = "https://www.alphavantage.co/query?function=GLOBAL
 
 uint64_t now_ms() {
   return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+}
+
+struct ScheduleSlot {
+  int hour;
+  int minute;
+};
+// US Eastern time -- these are Alpha Vantage/NYSE trading-hours checkpoints,
+// not tied to the user's own display timezone. Weekdays only (tm_wday 1-5)
+// -- see class comment in stock_client.hpp re: Alpha Vantage's 25 req/day
+// free-tier cap and end-of-day-only data.
+constexpr ScheduleSlot kScheduleSlots[] = {{10, 0}, {12, 0}, {14, 30}, {17, 0}};
+
+// Returns the UTC timestamp of the Nth (1-based) given weekday (0=Sunday) of
+// `month` in `year`, at midnight UTC.
+std::time_t nth_weekday_utc(int year, int month, int weekday, int nth) {
+  struct tm t {};
+  t.tm_year = year - 1900;
+  t.tm_mon = month - 1;
+  t.tm_mday = 1;
+  const std::time_t first_of_month = timegm(&t);
+  struct tm first_tm {};
+  gmtime_r(&first_of_month, &first_tm);
+  const int day_of_first_match = 1 + ((weekday - first_tm.tm_wday + 7) % 7);
+  t.tm_mday = day_of_first_match + (nth - 1) * 7;
+  return timegm(&t);
+}
+
+// US Eastern DST rule (unchanged since 2007): EDT (UTC-4) from the 2nd
+// Sunday of March at 2:00am local (07:00 UTC) through the 1st Sunday of
+// November at 2:00am local (06:00 UTC); EST (UTC-5) otherwise. Computed
+// directly from UTC arithmetic (not via America/New_York's POSIX rule in
+// time_sync.cpp / the process-wide TZ env var) because this must stay
+// correct at true Eastern time even when the device's own display timezone
+// (Web Config's tz_iana) is set to something else -- mutating the global TZ
+// from this task would also race any other task calling localtime_r()
+// concurrently (e.g. printer ETA text).
+int eastern_utc_offset_seconds(std::time_t utc_now) {
+  struct tm utc_tm {};
+  gmtime_r(&utc_now, &utc_tm);
+  const int year = utc_tm.tm_year + 1900;
+  const std::time_t spring_utc = nth_weekday_utc(year, 3, 0, 2) + 7 * 3600;   // 2am EST -> EDT
+  const std::time_t fall_utc = nth_weekday_utc(year, 11, 0, 1) + 6 * 3600;    // 2am EDT -> EST
+  const bool is_dst = utc_now >= spring_utc && utc_now < fall_utc;
+  return is_dst ? -4 * 3600 : -5 * 3600;
+}
+
+// Returns the UTC timestamp of the most recent scheduled slot (Eastern time,
+// see kScheduleSlots) at or before `now`, or 0 if none has occurred yet
+// today (Eastern) or today (Eastern) is a weekend. A slot only counts as
+// "due" if it's newer than `last_fetch_slot_ts` (the slot that triggered the
+// previous fetch) -- callers compare the two so each slot fires exactly
+// once.
+std::time_t latest_due_slot(std::time_t now) {
+  const int offset_s = eastern_utc_offset_seconds(now);
+  // Adding the Eastern UTC offset to a UTC epoch and decomposing it with
+  // gmtime_r (not localtime_r) yields Eastern wall-clock fields without
+  // touching the global TZ state -- gmtime_r never consults TZ.
+  const std::time_t eastern_shifted = now + offset_s;
+  struct tm eastern_tm {};
+  if (gmtime_r(&eastern_shifted, &eastern_tm) == nullptr) {
+    return 0;
+  }
+  if (eastern_tm.tm_wday == 0 || eastern_tm.tm_wday == 6) {
+    return 0;  // Sunday / Saturday Eastern -- markets closed, nothing to fetch
+  }
+  std::time_t best = 0;
+  for (const ScheduleSlot& slot : kScheduleSlots) {
+    struct tm slot_tm = eastern_tm;
+    slot_tm.tm_hour = slot.hour;
+    slot_tm.tm_min = slot.minute;
+    slot_tm.tm_sec = 0;
+    const std::time_t slot_shifted = timegm(&slot_tm);
+    const std::time_t slot_utc = slot_shifted - offset_s;
+    if (slot_utc <= now && slot_utc > best) {
+      best = slot_utc;
+    }
+  }
+  return best;
 }
 
 // Alpha Vantage returns quote fields as JSON strings (e.g. "05. price":
@@ -61,12 +141,11 @@ esp_err_t StockClient::start() {
 }
 
 void StockClient::configure(const std::array<std::string, kStockSymbolCount>& symbols,
-                            const std::string& api_key, uint32_t poll_interval_s) {
+                            const std::string& api_key) {
   {
     std::lock_guard<std::mutex> lock(config_mutex_);
     symbols_ = symbols;
     api_key_ = api_key;
-    poll_interval_s_ = poll_interval_s > 0 ? poll_interval_s : 21600;
   }
   reconfigure_requested_.store(true);
   if (task_handle_ != nullptr) {
@@ -84,18 +163,21 @@ void StockClient::task_entry(void* context) {
 }
 
 void StockClient::task_loop() {
-  TickType_t last_fetch_tick = 0;
+  bool has_fetched_once = false;
+  std::time_t last_fetch_slot_ts = 0;
   while (true) {
-    reconfigure_requested_.store(false);
+    // exchange(), not store(false) -- need to know whether *this* iteration
+    // is the direct result of a configure() call (new symbols/API key), so a
+    // save always fetches immediately rather than silently waiting for the
+    // next schedule slot.
+    const bool just_reconfigured = reconfigure_requested_.exchange(false);
 
     std::array<std::string, kStockSymbolCount> symbols;
     std::string api_key;
-    uint32_t poll_interval_s;
     {
       std::lock_guard<std::mutex> lock(config_mutex_);
       symbols = symbols_;
       api_key = api_key_;
-      poll_interval_s = poll_interval_s_;
     }
     bool any_symbol = false;
     for (const auto& symbol : symbols) {
@@ -113,13 +195,24 @@ void StockClient::task_loop() {
 
     const bool wifi_ready = wifi_manager_ == nullptr || wifi_manager_->is_station_connected();
 
-    const TickType_t now_tick = xTaskGetTickCount();
-    const TickType_t elapsed_ticks = now_tick - last_fetch_tick;
-    const bool due = last_fetch_tick == 0 ||
-                     elapsed_ticks >= pdMS_TO_TICKS(poll_interval_s * 1000ULL);
+    // The very first fetch after boot, and every explicit configure() (i.e.
+    // every "Save Stocks Settings" in the portal), happens immediately
+    // regardless of clock/schedule -- otherwise a symbol/API-key change
+    // would silently sit unfetched until the next weekday slot. Passive,
+    // non-reconfigure fetches follow the fixed schedule (kScheduleSlots) so
+    // a slot only fires once and a reconfigure never "steals" a slot it
+    // didn't earn (last_fetch_slot_ts is only advanced when a real slot was
+    // actually due).
+    const std::time_t now = std::time(nullptr);
+    const std::time_t due_slot_ts = latest_due_slot(now);
+    const bool schedule_due = due_slot_ts != 0 && due_slot_ts > last_fetch_slot_ts;
+    const bool due = !has_fetched_once || just_reconfigured || schedule_due;
 
     if (configured && due && wifi_ready) {
-      last_fetch_tick = now_tick;
+      has_fetched_once = true;
+      if (due_slot_ts > last_fetch_slot_ts) {
+        last_fetch_slot_ts = due_slot_ts;
+      }
       fetch_once();
     }
 
@@ -137,9 +230,10 @@ void StockClient::task_loop() {
       continue;
     }
 
-    // Poll cycles are hours apart (see header comment re: 25 req/day free
-    // tier) -- no need for weather's ~1s recheck cadence once Wi-Fi is up
-    // and a fetch isn't due; a slower wake keeps this task mostly idle.
+    // Schedule slots are hours apart -- no need for weather's ~1s recheck
+    // cadence once Wi-Fi is up and no slot is due; a slower wake keeps this
+    // task mostly idle. 30s keeps slot-boundary latency low without busy-
+    // polling.
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(30000));
   }
 }
@@ -169,6 +263,13 @@ bool StockClient::fetch_once() {
     }
     any_attempted = true;
 
+    // `updated.quotes[i]` currently still holds whatever the previous cycle
+    // last fetched (it was cloned from snapshot() above). Only overwrite it
+    // below on a successful parse, or when the tracked symbol itself
+    // changed -- a failed fetch of the *same* symbol should leave the last
+    // known-good price/color on screen rather than blanking it.
+    const bool same_symbol_as_before = updated.quotes[i].symbol == symbols[i];
+
     const std::string url =
         std::string(kUrlPrefix) + symbols[i] + "&apikey=" + api_key;
     int status_code = 0;
@@ -177,18 +278,47 @@ bool StockClient::fetch_once() {
 
     StockQuote quote;
     quote.symbol = symbols[i];
+    bool parsed_ok = false;
     if (!request_ok) {
       ESP_LOGW(kTag, "Fetch failed for symbol %s", symbols[i].c_str());
     } else if (status_code < 200 || status_code >= 300) {
       ESP_LOGW(kTag, "Fetch rejected for symbol %s: status=%d", symbols[i].c_str(), status_code);
     } else if (parse_quote_response(response_body, &quote)) {
       any_ok = true;
+      parsed_ok = true;
     } else {
+      // Alpha Vantage reports rate-limit/bad-key/bad-symbol conditions as a
+      // 200 with an "Information"/"Note"/"Error Message" field instead of a
+      // real "Global Quote" object, so the body itself is the only way to
+      // tell those apart -- capped to keep one bad response from flooding
+      // the log. Alpha Vantage's rate-limit message echoes the API key back
+      // verbatim (confirmed on-device), so mask it the same way the request
+      // URL log above already does before printing.
+      std::string masked_body = response_body;
+      if (!api_key.empty()) {
+        size_t pos = 0;
+        while ((pos = masked_body.find(api_key, pos)) != std::string::npos) {
+          masked_body.replace(pos, api_key.size(), "***");
+          pos += 3;
+        }
+      }
+      constexpr size_t kLogBodyPreviewChars = 300;
       ESP_LOGW(kTag, "Symbol %s: response parsed but no quote fields found -- "
-                     "rate limit likely hit (25 req/day free tier) or symbol invalid",
-               symbols[i].c_str());
+                     "rate limit likely hit (25 req/day free tier), bad API key, or "
+                     "invalid symbol. Response body: %.*s",
+               symbols[i].c_str(), static_cast<int>(std::min(masked_body.size(), kLogBodyPreviewChars)),
+               masked_body.c_str());
     }
-    updated.quotes[i] = quote;
+
+    if (parsed_ok) {
+      updated.quotes[i] = quote;
+    } else if (!same_symbol_as_before) {
+      // Symbol was just changed (or this is the first fetch for it) --
+      // there's no prior data worth keeping, so show "--" rather than a
+      // stale quote for a different ticker.
+      updated.quotes[i] = quote;
+    }
+    // else: leave updated.quotes[i] (the previous cycle's data) untouched.
   }
 
   updated.last_fetch_ok = any_ok;

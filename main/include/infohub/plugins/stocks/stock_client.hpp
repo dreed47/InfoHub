@@ -19,7 +19,10 @@ constexpr uint8_t kStockSymbolCount = 4;
 
 // Latest fetched quote for one ticker symbol. `has_data` is true once a
 // successful fetch has populated price/change; `configured` on the owning
-// StockSnapshot gates whether any of this is meaningful at all.
+// StockSnapshot gates whether any of this is meaningful at all. A quote
+// that fails to fetch keeps the previous cycle's price/change/has_data as-is
+// (see StockClient::fetch_once()) -- the screen always shows the last known
+// good quote rather than blanking out on a transient failure.
 struct StockQuote {
   std::string symbol;
   bool has_data = false;
@@ -49,11 +52,18 @@ struct StockSnapshot {
 // WeatherFlowClient (see weather_flow_client.hpp).
 //
 // Free-tier Alpha Vantage accounts are capped at 25 requests/day; with 4
-// symbols that's ~6 poll cycles/day, so poll_interval_s should default to
-// several hours, not weather's 5-minute cadence. Free-tier quote data itself
-// also only refreshes once per trading day (end-of-day), independent of how
-// often this polls — see stocks_plugin.hpp for where that's surfaced to the
-// user.
+// symbols that's 4 requests/cycle, so polling is pinned to a fixed
+// weekday schedule rather than a free-running interval -- see
+// kScheduleSlots in stock_client.cpp (10:00, 12:00, 14:30, 17:00 US
+// Eastern time, Mon-Fri only; markets/quote data don't move on weekends).
+// The schedule is pinned to true Eastern time via its own UTC-based DST
+// arithmetic (see eastern_utc_offset_seconds() in stock_client.cpp) --
+// independent of the device's own display timezone (Web Config's
+// tz_iana/time_sync.hpp), which may be set to something else entirely.
+// Requires SNTP (see time_sync.hpp) for a correct UTC clock; until that's
+// synced the schedule simply never fires, but the very first configure()
+// after boot always fetches once immediately regardless of the clock, so
+// the screen isn't left empty.
 class StockClient {
  public:
   StockClient() = default;
@@ -71,12 +81,13 @@ class StockClient {
   // (falls back to unconditional connect, same as before this existed).
   void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
 
-  // Sets symbols/api_key/poll interval and wakes the task for an immediate
-  // fetch. Empty entries in `symbols` are skipped when fetching. Passing an
-  // empty api_key, or all-empty symbols, marks the client unconfigured (task
-  // idles, snapshot().configured stays false).
+  // Sets symbols/api_key and wakes the task for an immediate first fetch.
+  // Empty entries in `symbols` are skipped when fetching. Passing an empty
+  // api_key, or all-empty symbols, marks the client unconfigured (task
+  // idles, snapshot().configured stays false). Subsequent fetches follow
+  // the fixed weekday schedule (see class comment), not this call.
   void configure(const std::array<std::string, kStockSymbolCount>& symbols,
-                 const std::string& api_key, uint32_t poll_interval_s);
+                 const std::string& api_key);
 
   StockSnapshot snapshot() const;
 
@@ -95,7 +106,6 @@ class StockClient {
   mutable std::mutex config_mutex_;
   std::array<std::string, kStockSymbolCount> symbols_{};
   std::string api_key_;
-  uint32_t poll_interval_s_ = 21600;  // 6h default — see class comment re: 25 req/day free tier
   std::atomic<bool> reconfigure_requested_{false};
 
   mutable std::mutex snapshot_mutex_;

@@ -3,8 +3,6 @@
 
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
 
-#include <cstdlib>
-
 #include "cJSON.h"
 #include "infohub/config_store.hpp"
 #include "infohub/portal_shared.hpp"
@@ -33,7 +31,6 @@ esp_err_t StocksPlugin::handle_config_get(httpd_req_t* request) {
     return plugin->setup_portal_->send_locked_response(request);
   }
 
-  const std::string poll_s_str = plugin->config_store_->load_plugin_string(kPluginNs, "poll_s");
   const StockSnapshot snapshot = plugin->client_.snapshot();
 
   std::string body = "{\"symbols\":[";
@@ -45,9 +42,7 @@ esp_err_t StocksPlugin::handle_config_get(httpd_req_t* request) {
     }
     body += "\"" + json_escape(symbol) + "\"";
   }
-  body += "],\"poll_s\":";
-  body += poll_s_str.empty() ? "21600" : poll_s_str;
-  body += ",\"enabled\":";
+  body += "],\"enabled\":";
   body += plugin->enabled() ? "true" : "false";
   body += ",\"configured\":";
   body += snapshot.configured ? "true" : "false";
@@ -103,32 +98,19 @@ esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
     }
   }
   const std::string submitted_api_token = read_string_field(root, "api_token");
-  const std::string poll_s_field = trim_copy(read_string_field(root, "poll_s"));
   cJSON_Delete(root);
 
   const std::string stored_api_token =
       plugin->config_store_->load_plugin_string(kPluginNs, "api_token");
   const std::string api_token = merge_secret(submitted_api_token, stored_api_token);
 
-  // Free-tier Alpha Vantage is 25 requests/day; 4 symbols = 4 requests per
-  // poll cycle, so anything under ~1h risks burning the daily budget in a
-  // handful of cycles -- floor at 1h rather than weather's 1min floor.
-  uint32_t poll_interval_s = 21600;
-  if (!poll_s_field.empty()) {
-    poll_interval_s = static_cast<uint32_t>(std::strtoul(poll_s_field.c_str(), nullptr, 10));
-    if (poll_interval_s < 3600) {
-      poll_interval_s = 3600;
-    }
-  }
-
   for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
     const std::string key = "symbol" + std::to_string(i + 1);
     plugin->config_store_->save_plugin_string(kPluginNs, key.c_str(), symbols[i]);
   }
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
-  plugin->config_store_->save_plugin_string(kPluginNs, "poll_s", std::to_string(poll_interval_s));
 
-  plugin->client_.configure(symbols, api_token, poll_interval_s);
+  plugin->client_.configure(symbols, api_token);
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;

@@ -1904,7 +1904,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   if (wifi_configured) {
     begin_collapsible_section(
         "Stocks",
-        "Up to 4 ticker symbols via Alpha Vantage's cloud API. Free-tier accounts are capped at 25 requests/day (4 symbols = 4 requests per poll cycle), and quote data itself only refreshes once per trading day regardless of poll frequency.",
+        "Up to 4 ticker symbols via Alpha Vantage's cloud API. Free-tier accounts are capped at 25 requests/day, so refreshes run on a fixed schedule: weekdays at 10:00, 12:00, 14:30 and 17:00 US Eastern time (market hours) -- not user-configurable.",
         "Setup", "idle", false, "stocks-section-pill");
     html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"stocks_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
     html += "<div class=\"grid-2\">";
@@ -1914,10 +1914,9 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "<div class=\"field\"><label for=\"stocks_symbol4\">Symbol 4</label><input id=\"stocks_symbol4\" value=\"\" autocomplete=\"off\" placeholder=\"AMZN\"></div>";
     html += "</div>";
     html += "<div class=\"field\"><label for=\"stocks_api_token\">Alpha Vantage API Key</label><input id=\"stocks_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved key\" autocomplete=\"off\"></div>";
-    html += "<div class=\"field\"><label for=\"stocks_poll_s\">Poll Interval (seconds)</label><input id=\"stocks_poll_s\" type=\"number\" min=\"3600\" value=\"21600\"></div>";
     html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"stocks-detail\">Not configured</span></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"stocks-save-button\">Save Stocks Settings</button>";
-    html += "<div class=\"micro\">Saves symbols, API key and poll interval, then fetches immediately.</div></div>";
+    html += "<div class=\"micro\">Saves symbols and API key, then fetches immediately. Later refreshes follow the fixed weekday schedule above.</div></div>";
     end_collapsible_section();
   }
 #endif
@@ -2652,8 +2651,6 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(!stocksLoaded){const symbols=body.symbols||[];"
           "for(let i=0;i<4;i++){const inp=document.getElementById('stocks_symbol'+(i+1));"
           "if(inp)inp.value=symbols[i]||'';}"
-          "const pollInput=document.getElementById('stocks_poll_s');"
-          "if(pollInput)pollInput.value=body.poll_s||21600;"
           "const enabledInput=document.getElementById('stocks_enabled');"
           "if(enabledInput)enabledInput.checked=body.enabled!==false;"
           "stocksLoaded=true;}"
@@ -2673,8 +2670,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "await fetch('/api/plugins/stocks/config',{method:'POST',credentials:'same-origin',"
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
           "symbols:symbols,"
-          "api_token:document.getElementById('stocks_api_token').value,"
-          "poll_s:document.getElementById('stocks_poll_s').value})});"
+          "api_token:document.getElementById('stocks_api_token').value})});"
           "document.getElementById('stocks_api_token').value='';"
           "await loadStocksStatus();}"
           "catch(error){}finally{stocksSaveButton.disabled=false;}});}";

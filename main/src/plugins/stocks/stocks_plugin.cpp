@@ -1,7 +1,6 @@
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
 
 #include <cstdio>
-#include <cstdlib>
 
 #include "esp_log.h"
 #include "infohub/ui.hpp"
@@ -22,6 +21,7 @@
 extern "C" {
 extern const lv_font_t dosis_20;
 extern const lv_font_t dosis_32;
+extern const lv_font_t dosis_40;
 }
 
 namespace infohub {
@@ -29,9 +29,12 @@ namespace infohub {
 namespace {
 constexpr char kTag[] = "infohub.stocks";
 constexpr char kPluginNs[] = "stocks";
-constexpr uint32_t kGreenHex = 0x00CC66;
-constexpr uint32_t kRedHex = 0xFF3333;
-constexpr uint32_t kNeutralHex = 0x666666;
+// Vivid, high-contrast up/down colors -- these drive both the price text
+// and the dot, so they need to read clearly at a glance, not just as a
+// small accent.
+constexpr uint32_t kGreenHex = 0x00E676;
+constexpr uint32_t kRedHex = 0xFF3D3D;
+constexpr uint32_t kNeutralHex = 0x888888;
 }  // namespace
 
 esp_err_t StocksPlugin::init(PluginContext& ctx) {
@@ -61,12 +64,7 @@ void StocksPlugin::load_config() {
     symbols[i] = config_store_->load_plugin_string(kPluginNs, key.c_str());
   }
   const std::string api_key = config_store_->load_plugin_string(kPluginNs, "api_token");
-  const std::string poll_s_str = config_store_->load_plugin_string(kPluginNs, "poll_s");
-  uint32_t poll_interval_s = 21600;
-  if (!poll_s_str.empty()) {
-    poll_interval_s = static_cast<uint32_t>(std::strtoul(poll_s_str.c_str(), nullptr, 10));
-  }
-  client_.configure(symbols, api_key, poll_interval_s);
+  client_.configure(symbols, api_key);
 
   set_enabled(config_store_->load_plugin_string(kPluginNs, "enabled") != "0");
 }
@@ -103,7 +101,7 @@ void StocksPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
 
   for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
     lv_obj_t* row = lv_obj_create(column);
-    lv_obj_set_size(row, 300, LV_SIZE_CONTENT);
+    lv_obj_set_size(row, 320, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
@@ -121,11 +119,11 @@ void StocksPlugin::build_screen(lv_obj_t* parent, uint8_t /*page_index*/) {
 
     qr.price_label = lv_label_create(row);
     lv_label_set_text(qr.price_label, "--");
-    lv_obj_set_style_text_font(qr.price_label, &dosis_32, 0);
-    lv_obj_set_style_text_color(qr.price_label, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_text_font(qr.price_label, &dosis_40, 0);
+    lv_obj_set_style_text_color(qr.price_label, lv_color_hex(kNeutralHex), 0);
 
     qr.dot = lv_obj_create(row);
-    lv_obj_set_size(qr.dot, 16, 16);
+    lv_obj_set_size(qr.dot, 24, 24);
     lv_obj_set_style_radius(qr.dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(qr.dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(qr.dot, lv_color_hex(kNeutralHex), 0);
@@ -167,6 +165,7 @@ void StocksPlugin::update_ui() {
       lv_label_set_text(qr.symbol_label, "--");
       lv_label_set_text(qr.price_label, "");
       lv_obj_set_style_bg_color(qr.dot, lv_color_hex(kNeutralHex), 0);
+      lv_obj_set_style_text_color(qr.price_label, lv_color_hex(kNeutralHex), 0);
       continue;
     }
     lv_label_set_text(qr.symbol_label, quote.symbol.c_str());
@@ -175,10 +174,13 @@ void StocksPlugin::update_ui() {
       char price_buf[24];
       std::snprintf(price_buf, sizeof(price_buf), "%.2f", quote.price);
       lv_label_set_text(qr.price_label, price_buf);
-      lv_obj_set_style_bg_color(qr.dot, lv_color_hex(quote.change >= 0.0 ? kGreenHex : kRedHex), 0);
+      const uint32_t direction_color = quote.change >= 0.0 ? kGreenHex : kRedHex;
+      lv_obj_set_style_bg_color(qr.dot, lv_color_hex(direction_color), 0);
+      lv_obj_set_style_text_color(qr.price_label, lv_color_hex(direction_color), 0);
     } else {
       lv_label_set_text(qr.price_label, "--");
       lv_obj_set_style_bg_color(qr.dot, lv_color_hex(kNeutralHex), 0);
+      lv_obj_set_style_text_color(qr.price_label, lv_color_hex(kNeutralHex), 0);
     }
   }
 
