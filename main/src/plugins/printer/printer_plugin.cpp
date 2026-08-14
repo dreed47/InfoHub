@@ -581,11 +581,17 @@ void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   }
   if (page_index == kMaxAmsUnits + 2) {
     build_preview_page(parent);
+    // Explicit reset before registering, same as ams_unit_present_[] above
+    // -- this is the true per-boot reset point, not just relying on the
+    // member's default-constructed value (see preview_page_available_'s
+    // declaration comment for why that default matters here).
+    preview_page_available_ = false;
     ui_->set_plugin_page_available(id(), page_index, &preview_page_available_);
     return;
   }
   if (page_index == kMaxAmsUnits + 3) {
     build_camera_page(parent);
+    camera_page_available_ = false;
     ui_->set_plugin_page_available(id(), page_index, &camera_page_available_);
     // Default-to-dashboard redirect moved to update_ui() (see
     // initial_page_set_) — at this point in boot no page in the pool is

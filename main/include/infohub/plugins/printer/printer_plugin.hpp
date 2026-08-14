@@ -300,10 +300,17 @@ class PrinterPlugin : public Plugin {
 
   bool detail_visible_ = true;
   bool show_logo_ = false;
-  bool preview_page_available_ = true;
+  // Must default false, not true -- this doubles as the preview page's
+  // pager-visibility flag (see set_plugin_page_available() in build_screen()),
+  // and build_screen() runs unconditionally regardless of Plugin::enabled_.
+  // Defaulting true made a disabled-at-boot printer's preview/camera pages
+  // register as always-visible/navigable in the pager (landing/swipe bug,
+  // confirmed on-device 2026-08-14) until the first update_ui() tick
+  // recomputed the real value -- a tick that a disabled plugin never gets.
+  bool preview_page_available_ = false;
   bool preview_image_visible_ = false;
   bool preview_text_image_mode_ = false;
-  bool camera_page_available_ = true;
+  bool camera_page_available_ = false;
   bool camera_image_visible_ = false;
   bool camera_text_image_mode_ = false;
   // One-time boot redirect to the main dashboard, fired from update_ui()

@@ -779,6 +779,21 @@ esp_err_t Ui::build_dashboard() {
   for (uint16_t i = 0; i < plugin_pool_size_; ++i) {
     plugin_pages_[i] = create_page(pager);
     plugin_pages_enabled_[i] = false;
+    // Must match plugin_pages_enabled_[i]'s false default -- set_hidden()
+    // otherwise only ever runs inside set_plugin_pages_enabled(), which a
+    // plugin that starts (and stays) disabled never calls (Application only
+    // calls update_ui() for enabled plugins). Without this, the *tracking*
+    // flag correctly says "disabled" (so pager-settle logic in
+    // clamp_enabled_page()/next_enabled_page() correctly skips it when
+    // deciding where to land), but the widget itself is still visually
+    // rendered at its normal position in the pager's horizontal layout --
+    // a raw finger drag isn't gated by that tracking flag at all, so it
+    // physically scrolls over real, visible content before SCROLL_END's
+    // snap-back logic redirects away. Confirmed on-device 2026-08-14: a
+    // disabled plugin's pages were draggable-into and fully rendered, even
+    // though every settled (SCROLL_END) navigation decision correctly
+    // avoided them.
+    set_hidden(plugin_pages_[i], true);
     enable_touch_bubble(plugin_pages_[i]);
   }
 

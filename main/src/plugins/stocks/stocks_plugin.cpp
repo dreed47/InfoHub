@@ -64,9 +64,21 @@ void StocksPlugin::load_config() {
     symbols[i] = config_store_->load_plugin_string(kPluginNs, key.c_str());
   }
   const std::string api_key = config_store_->load_plugin_string(kPluginNs, "api_token");
-  client_.configure(symbols, api_key);
 
-  set_enabled(config_store_->load_plugin_string(kPluginNs, "enabled") != "0");
+  // Read/apply the enabled flag BEFORE configuring the client -- StockClient
+  // has no concept of Plugin::enabled_ itself, only "has symbols+key or
+  // not", so a disabled plugin must never hand it real credentials or its
+  // own task will fetch on boot regardless of the toggle. Mirrors "disabled"
+  // as "unconfigured" (the task already idles forever in that state, no
+  // separate signal needed); handle_enabled_post() re-applies the real
+  // symbols/key if the user re-enables from the portal.
+  const bool enabled = config_store_->load_plugin_string(kPluginNs, "enabled") != "0";
+  set_enabled(enabled);
+  if (enabled) {
+    client_.configure(symbols, api_key);
+  } else {
+    client_.configure({}, "");
+  }
 }
 
 void StocksPlugin::tick(uint64_t) {

@@ -110,7 +110,14 @@ esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
   }
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
 
-  plugin->client_.configure(symbols, api_token);
+  // Only actually push credentials/symbols to the client (and let it start
+  // fetching) if the plugin is currently enabled -- otherwise a save while
+  // disabled would fire an immediate fetch despite the toggle, same bug
+  // load_config() had. handle_enabled_post() pushes the up-to-date stored
+  // values in when the user later flips it back on.
+  if (plugin->enabled()) {
+    plugin->client_.configure(symbols, api_token);
+  }
 
   send_json(request, "{\"status\":\"saved\"}");
   return ESP_OK;
@@ -138,6 +145,26 @@ esp_err_t StocksPlugin::handle_enabled_post(httpd_req_t* request) {
 
   plugin->config_store_->save_plugin_string(kPluginNs, "enabled", enabled ? "1" : "0");
   plugin->set_enabled(enabled);
+
+  // StockClient has no concept of Plugin::enabled_ -- push/clear its
+  // credentials here so the toggle takes effect immediately (matches
+  // load_config()/handle_config_post()'s "disabled == unconfigured, don't
+  // hand the client real symbols/key" rule) rather than waiting for the
+  // next scheduled slot to notice nothing changed, or worse, having a
+  // stale re-enable never actually start fetching because init() ran while
+  // still disabled.
+  if (enabled) {
+    std::array<std::string, kStockSymbolCount> symbols{};
+    for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
+      const std::string key = "symbol" + std::to_string(i + 1);
+      symbols[i] = plugin->config_store_->load_plugin_string(kPluginNs, key.c_str());
+    }
+    const std::string api_token = plugin->config_store_->load_plugin_string(kPluginNs, "api_token");
+    plugin->client_.configure(symbols, api_token);
+  } else {
+    plugin->client_.configure({}, "");
+  }
+
   if (!enabled && plugin->ui_ != nullptr) {
     // Application's update_ui() loop skips disabled plugins, so the pager
     // wouldn't otherwise notice the page should stop being offered -- hide
