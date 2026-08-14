@@ -7,7 +7,7 @@ This document is for developers and advanced users who want to clone, build, fla
 - Windows, Linux or macOS
 - Git
 - Python 3
-- ESP-IDF `v5.5.4`
+- ESP-IDF `v5.5.4` (bundles `esptool.py`, used for manual flashing)
 - A USB data cable
 - Enough free disk space for separate build directories
 
@@ -81,9 +81,13 @@ idf.py -B build-lcd_2_8c -DINFOHUB_HW_VARIANT=lcd_2_8c -p COM7 monitor
 
 Build both variants first. Then run:
 
+On Windows:
+
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/package_release.ps1 -Version v0.1.0-alpha
 ```
+
+On Linux/macOS, run the two per-variant packaging commands from the next section (`tools/package_release.ps1` is PowerShell-only; there is no shell-script equivalent).
 
 The script creates the four current release images plus versioned archive copies:
 
@@ -117,10 +121,16 @@ Do not use an OTA image as a full image at address `0x0`.
 
 ## Manual full-image flashing
 
+Use `esptool.exe` on Windows or `esptool.py` on Linux/macOS (both installed with ESP-IDF).
+
 AMOLED 1.75:
 
 ```powershell
 esptool.exe --chip esp32s3 --port COM9 write_flash 0x0 release/initial/infohub_full.bin
+```
+
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyUSB0 write_flash 0x0 release/initial/infohub_full.bin
 ```
 
 LCD 2.8C:
@@ -128,6 +138,12 @@ LCD 2.8C:
 ```powershell
 esptool.exe --chip esp32s3 --port COM7 write_flash 0x0 release/2.8c/initial/infohub_full.bin
 ```
+
+```bash
+esptool.py --chip esp32s3 --port /dev/ttyUSB0 write_flash 0x0 release/2.8c/initial/infohub_full.bin
+```
+
+Replace the port with the correct one for your system (e.g. `/dev/tty.usbserial-*` on macOS).
 
 The merged image already contains the bootloader and partition table.
 

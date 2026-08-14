@@ -7,6 +7,12 @@ assignees: ''
 
 ---
 
+**Which plugin is this about?**
+- [ ] Printer (Bambu Lab)
+- [ ] Weather
+- [ ] Stocks
+- [ ] Core (Wi-Fi, Web Config, display, not plugin-specific)
+
 **Describe the bug**
 A clear and concise description of what the bug is.
 
