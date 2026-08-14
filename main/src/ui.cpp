@@ -694,6 +694,10 @@ void Ui::apply_ring_visual_locked(const RingVisual& ring, int progress, uint32_t
     lv_obj_set_style_text_color(progress_label_, lv_color_hex(text_hex), 0);
     last_ring_text_hex_ = text_hex;
   }
+
+  char progress_buffer[8] = {};
+  std::snprintf(progress_buffer, sizeof(progress_buffer), "%d%%", progress);
+  set_label_text_if_changed(progress_label_, progress_buffer);
 }
 
 void Ui::stop_ring_animations_locked() {

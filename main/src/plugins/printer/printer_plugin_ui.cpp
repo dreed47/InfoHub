@@ -1553,12 +1553,6 @@ void PrinterPlugin::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool 
     ui_->note_activity(true);
   }
 
-  const int progress = std::clamp(static_cast<int>(snapshot.progress_percent + 0.5f), 0, 100);
-  (void)progress;  // ring visual (which also uses progress) is computed by apply_ring_visual()
-
-  char progress_buffer[8] = {};
-  std::snprintf(progress_buffer, sizeof(progress_buffer), "%d%%",
-                std::clamp(static_cast<int>(snapshot.progress_percent + 0.5f), 0, 100));
   const std::string status_text = lifecycle_label(snapshot);
   set_label_text_if_changed(status_label_, status_text);
 
