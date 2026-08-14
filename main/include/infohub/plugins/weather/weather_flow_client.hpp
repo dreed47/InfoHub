@@ -20,11 +20,16 @@ constexpr uint8_t kHourlyForecastCount = 4;
 
 // One hour's entry from WeatherFlow's better_forecast endpoint
 // (forecast.hourly[]). `has_data` is set only if the entry parsed with at
-// least a temperature reading.
+// least a temperature reading. `icon` is WeatherFlow's small fixed enum
+// (e.g. "clear-day", "rainy", "possibly-thunderstorm-night" -- see
+// condition_color_for_icon() in weather_plugin.cpp for the full set), not
+// the free-text `conditions` string, which has too many phrasings ("Partly
+// Cloudy", "Rain Likely", ...) to map to a color reliably.
 struct HourlyForecastEntry {
   uint64_t time_unix = 0;
   double air_temperature_c = 0.0;
   std::string conditions;
+  std::string icon;
   double precip_probability = 0.0;
   bool has_data = false;
 };
@@ -66,6 +71,13 @@ struct WeatherFlowSnapshot {
   // the observation poll interval above.
   bool has_forecast = false;
   std::array<HourlyForecastEntry, kHourlyForecastCount> hourly_forecast{};
+
+  // better_forecast's top-level current_conditions object -- fetched on the
+  // same request/cadence as hourly_forecast above (no extra API call).
+  // Drives the main page's condition-color ring (see weather_plugin.cpp).
+  bool has_current_conditions = false;
+  std::string current_icon;
+  std::string current_conditions_text;
 };
 
 // Polls WeatherFlow's cloud REST API (https://swd.weatherflow.com/swd/rest/

@@ -306,6 +306,19 @@ void WeatherFlowClient::parse_forecast_response(const std::string& body,
     return;
   }
 
+  const cJSON* current = cJSON_GetObjectItemCaseSensitive(root, "current_conditions");
+  if (current != nullptr) {
+    std::string icon;
+    std::string conditions;
+    const bool has_icon = read_string(current, "icon", &icon);
+    read_string(current, "conditions", &conditions);
+    if (has_icon) {
+      out->has_current_conditions = true;
+      out->current_icon = icon;
+      out->current_conditions_text = conditions;
+    }
+  }
+
   const cJSON* forecast_obj = cJSON_GetObjectItemCaseSensitive(root, "forecast");
   const cJSON* hourly_array =
       forecast_obj != nullptr ? cJSON_GetObjectItemCaseSensitive(forecast_obj, "hourly") : nullptr;
@@ -328,6 +341,7 @@ void WeatherFlowClient::parse_forecast_response(const std::string& body,
     }
     const bool has_temp = read_number(entry, "air_temperature", &parsed.air_temperature_c);
     read_string(entry, "conditions", &parsed.conditions);
+    read_string(entry, "icon", &parsed.icon);
     read_number(entry, "precip_probability", &parsed.precip_probability);
     parsed.has_data = has_time && has_temp;
     if (parsed.has_data) {

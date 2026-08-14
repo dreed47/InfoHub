@@ -75,7 +75,12 @@ class WeatherPlugin : public Plugin {
   WeatherFlowClient client_{};
 
   // Page 0 widgets, built once in build_screen(), updated in update_ui().
+  // condition_arc_ is a full-circle ring (built first, so it draws behind
+  // the text column) colored per current_conditions.icon -- see
+  // condition_color_for_icon() in weather_plugin.cpp.
+  lv_obj_t* condition_arc_ = nullptr;
   lv_obj_t* temp_label_ = nullptr;
+  lv_obj_t* condition_text_label_ = nullptr;
   lv_obj_t* detail_label_ = nullptr;
   lv_obj_t* status_label_ = nullptr;
 

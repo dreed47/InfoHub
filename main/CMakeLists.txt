@@ -118,6 +118,7 @@ idf_component_register(
         "include/font/dosis_20.c"
         "include/font/dosis_32.c"
         "include/font/dosis_40.c"
+        "include/font/dosis_64.c"
         "include/font/mdi_30.c"
         "src/pmu.cpp"
         "src/debug_log_buffer.cpp"

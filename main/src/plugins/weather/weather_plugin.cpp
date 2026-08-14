@@ -25,6 +25,7 @@ extern "C" {
 extern const lv_font_t dosis_20;
 extern const lv_font_t dosis_32;
 extern const lv_font_t dosis_40;
+extern const lv_font_t dosis_64;
 }
 
 namespace infohub {
@@ -32,6 +33,43 @@ namespace infohub {
 namespace {
 constexpr char kTag[] = "infohub.weather";
 constexpr char kPluginNs[] = "weather";
+constexpr int kConditionArcDiameter = board::kDisplayWidth - 60;
+constexpr int kConditionArcWidth = 18;
+constexpr uint32_t kConditionArcNeutralHex = 0x444444;
+
+// WeatherFlow's `icon` field on both current_conditions and each hourly
+// forecast entry is a small fixed enum (DarkSky-derived, confirmed against
+// WeatherFlow's REST API docs) -- unlike the free-text `conditions` string
+// ("Partly Cloudy", "Rain Likely", ...), it's stable enough to map to a
+// color category. Substring match (not exact), so e.g.
+// "possibly-thunderstorm-night" still hits "thunderstorm".
+uint32_t condition_color_for_icon(const std::string& icon) {
+  if (icon.find("thunderstorm") != std::string::npos) {
+    return 0x8E44AD;  // storm -- deep purple
+  }
+  if (icon.find("snow") != std::string::npos || icon.find("sleet") != std::string::npos) {
+    return 0x7FD8F5;  // snow/sleet -- icy cyan
+  }
+  if (icon.find("rain") != std::string::npos) {
+    return 0x3B82F6;  // rain -- blue
+  }
+  if (icon.find("foggy") != std::string::npos) {
+    return 0x9AA5B1;  // fog -- muted grey
+  }
+  if (icon.find("windy") != std::string::npos) {
+    return 0x2FBF9F;  // windy -- teal
+  }
+  if (icon.find("partly-cloudy") != std::string::npos) {
+    return 0xB0BEC5;  // partly cloudy -- light grey-blue
+  }
+  if (icon.find("cloudy") != std::string::npos) {
+    return 0x78909C;  // overcast -- darker grey-blue
+  }
+  if (icon.find("clear") != std::string::npos) {
+    return 0xFFC940;  // clear/sunny -- gold
+  }
+  return kConditionArcNeutralHex;  // unrecognized icon -- neutral, not a guess
+}
 
 // "3pm", "11am" — respects TZ since time_sync.cpp calls tzset() via
 // set_timezone_iana() at boot (see main/src/time_sync.cpp). Same
@@ -163,6 +201,26 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
     return;
   }
 
+  if (page_index == 0) {
+    // Created before `column` below so it draws behind the text -- a full
+    // ring (bg_angles 0-360, value pinned to the range max) recolored per
+    // current_conditions.icon in update_ui(), not a progress metric.
+    condition_arc_ = lv_arc_create(parent);
+    lv_obj_set_size(condition_arc_, kConditionArcDiameter, kConditionArcDiameter);
+    lv_obj_center(condition_arc_);
+    lv_arc_set_rotation(condition_arc_, 270);
+    lv_arc_set_bg_angles(condition_arc_, 0, 360);
+    lv_arc_set_range(condition_arc_, 0, 100);
+    lv_arc_set_value(condition_arc_, 100);
+    lv_obj_remove_style(condition_arc_, nullptr, LV_PART_KNOB);
+    lv_obj_clear_flag(condition_arc_, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_arc_width(condition_arc_, kConditionArcWidth, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(condition_arc_, kConditionArcWidth, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(condition_arc_, lv_color_hex(kConditionArcNeutralHex), LV_PART_MAIN);
+    lv_obj_set_style_arc_color(condition_arc_, lv_color_hex(kConditionArcNeutralHex), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(condition_arc_, LV_OPA_TRANSP, 0);
+  }
+
   lv_obj_t* column = lv_obj_create(parent);
   lv_obj_set_size(column, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
   lv_obj_set_style_bg_opa(column, LV_OPA_TRANSP, 0);
@@ -176,8 +234,13 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   if (page_index == 0) {
     temp_label_ = lv_label_create(column);
     lv_label_set_text(temp_label_, "--");
-    lv_obj_set_style_text_font(temp_label_, &dosis_40, 0);
+    lv_obj_set_style_text_font(temp_label_, &dosis_64, 0);
     lv_obj_set_style_text_color(temp_label_, lv_color_hex(0xFFFFFF), 0);
+
+    condition_text_label_ = lv_label_create(column);
+    lv_label_set_text(condition_text_label_, "");
+    lv_obj_set_style_text_font(condition_text_label_, &dosis_32, 0);
+    lv_obj_set_style_text_color(condition_text_label_, lv_color_hex(0xEEEEEE), 0);
 
     detail_label_ = lv_label_create(column);
     lv_label_set_text(detail_label_, "");
@@ -244,6 +307,26 @@ void WeatherPlugin::update_ui() {
     lv_label_set_text(status_label_,
                       snapshot.last_error.empty() ? "Waiting for first fetch..."
                                                    : snapshot.last_error.c_str());
+  }
+
+  if (condition_arc_ != nullptr) {
+    // Prefer better_forecast's current_conditions; fall back to the nearest
+    // hourly entry (same request, just a different part of the payload) if
+    // current_conditions wasn't present in the response.
+    std::string icon;
+    std::string condition_text;
+    if (snapshot.has_current_conditions) {
+      icon = snapshot.current_icon;
+      condition_text = snapshot.current_conditions_text;
+    } else if (snapshot.has_forecast && snapshot.hourly_forecast[0].has_data) {
+      icon = snapshot.hourly_forecast[0].icon;
+      condition_text = snapshot.hourly_forecast[0].conditions;
+    }
+    const uint32_t arc_color = icon.empty() ? kConditionArcNeutralHex : condition_color_for_icon(icon);
+    lv_obj_set_style_arc_color(condition_arc_, lv_color_hex(arc_color), LV_PART_INDICATOR);
+    if (condition_text_label_ != nullptr) {
+      lv_label_set_text(condition_text_label_, condition_text.c_str());
+    }
   }
 
   if (extra_detail_label_ != nullptr) {
