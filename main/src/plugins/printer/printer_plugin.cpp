@@ -587,11 +587,11 @@ void PrinterPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   if (page_index == kMaxAmsUnits + 3) {
     build_camera_page(parent);
     ui_->set_plugin_page_available(id(), page_index, &camera_page_available_);
-    // Last page this plugin builds — safe point to default to the main
-    // dashboard (historical boot behavior), not this plugin's own page 0
-    // (printer-selector), which Ui's own default (page pool index 0) would
-    // otherwise land on since printer registers first.
-    ui_->set_active_page_by_plugin(id(), kMaxAmsUnits + 1);
+    // Default-to-dashboard redirect moved to update_ui() (see
+    // initial_page_set_) — at this point in boot no page in the pool is
+    // marked enabled yet (that only happens on the first tick), so
+    // set_active_page_by_plugin() here would clamp to whatever page happens
+    // to read as "enabled by default" rather than the dashboard.
     return;
   }
   title_ = lv_label_create(parent);

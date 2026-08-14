@@ -317,6 +317,15 @@ class Ui {
   // Page the current swipe gesture started on; used for the page-advance
   // threshold decision when the finger is released (handle_pager_event).
   int scroll_origin_page_ = 0;
+  // True from a real finger-press SCROLL_BEGIN until that same gesture
+  // finalizes in handle_pager_event()'s SCROLL_END handling (covering its
+  // ANIM_ON snap-animation follow-through, whose own SCROLL_BEGIN fires with
+  // no pressed indev since the finger's already lifted by then). False the
+  // rest of the time, including during any fully programmatic pager scroll
+  // (set_active_page()'s own ANIM_OFF call, boot redirect, resettle, etc.),
+  // so that scroll's SCROLL_END doesn't get reinterpreted as a gesture
+  // release using stale scroll_origin_page_/scroll-position state.
+  bool pager_gesture_active_ = false;
   std::atomic<int> active_page_snapshot_{0};
   std::atomic<bool> page_scrolling_snapshot_{false};
   int last_parallax_clamped_ = -1;

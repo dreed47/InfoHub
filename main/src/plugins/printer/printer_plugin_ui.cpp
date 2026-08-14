@@ -1918,6 +1918,26 @@ void PrinterPlugin::update_ui() {
 
   apply_snapshot_locked(latest_snapshot_, false, std::move(pre_decoded_raw), &pre_decoded_dsc);
   apply_ring_visual();
+
+  // Default to the main dashboard on first boot, not this plugin's own page 0
+  // (printer-selector), which Ui's own default (page pool index 0) would
+  // otherwise land on since printer registers first. Must happen here, after
+  // set_plugin_pages_enabled() above and update_page_availability_locked()
+  // (inside apply_snapshot_locked) have both run at least once — page-enabled
+  // state isn't populated yet during build_screen(), so doing this jump from
+  // there instead landed on whatever page happened to read as "enabled by
+  // default" (see initial_page_set_'s declaration).
+  //
+  // set_plugin_pages_enabled() above can itself silently no-op if it fails to
+  // grab the LVGL lock (200ms timeout, common on a boot-contended tick) —
+  // when that happens the dashboard page isn't enabled yet, so jumping to it
+  // here would just clamp to whatever else reads enabled (e.g. the preview
+  // page) and get stuck there forever once latched. Only latch once the jump
+  // actually landed on the dashboard; otherwise retry next tick.
+  if (!initial_page_set_) {
+    ui_->set_active_page_by_plugin(id(), kMaxAmsUnits + 1);
+    initial_page_set_ = ui_->is_plugin_page_active(id(), kMaxAmsUnits + 1);
+  }
 }
 
 // --- Visibility / page-settle / tap callbacks --------------------------

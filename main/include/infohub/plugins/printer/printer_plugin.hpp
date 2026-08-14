@@ -306,6 +306,10 @@ class PrinterPlugin : public Plugin {
   bool camera_page_available_ = true;
   bool camera_image_visible_ = false;
   bool camera_text_image_mode_ = false;
+  // One-time boot redirect to the main dashboard, fired from update_ui()
+  // after the first real availability update — see that call site for why
+  // this can't happen from build_screen() instead.
+  bool initial_page_set_ = false;
   bool nozzle_aux_visible_ = false;
   bool bed_aux_visible_ = false;
   // Toggled by tapping the remaining-time row on page1: when true the row

@@ -1196,11 +1196,16 @@ void Ui::handle_pager_event(lv_event_t* event) {
   if (code == LV_EVENT_SCROLL_BEGIN) {
     scrolling_ = true;
     // Capture the gesture's origin page for the release-threshold decision
-    // below. Only finger-initiated scrolls count; the snap animation's own
-    // SCROLL_BEGIN (no pressed indev) must not overwrite it.
+    // below, and mark a real gesture as in progress. Only finger-initiated
+    // scrolls count; the snap animation's own SCROLL_BEGIN (no pressed
+    // indev) must not overwrite scroll_origin_page_, and must not clear
+    // pager_gesture_active_ either — by the time that follow-through fires,
+    // the finger that started the gesture has already been released, so
+    // "not pressed" doesn't mean "not part of a real gesture" here.
     if (lv_indev_t* begin_indev = lv_indev_active();
         begin_indev != nullptr && lv_indev_get_state(begin_indev) == LV_INDEV_STATE_PRESSED) {
       scroll_origin_page_ = nearest_enabled_page_for_scroll();
+      pager_gesture_active_ = true;
     }
     publish_page_state_snapshot();
 
@@ -1218,6 +1223,26 @@ void Ui::handle_pager_event(lv_event_t* event) {
   // finger: their own gesture will deliver a fresh SCROLL_END on release.
   if (lv_indev_t* active_indev = lv_indev_active();
       active_indev != nullptr && lv_indev_get_state(active_indev) == LV_INDEV_STATE_PRESSED) {
+    return;
+  }
+
+  // set_active_page() (boot redirect, resettle-after-availability-change,
+  // etc.) scrolls the pager itself via lv_obj_scroll_to_x(), which fires this
+  // same SCROLL_BEGIN/SCROLL_END pair with no pressed indev. Without this
+  // guard that synthetic SCROLL_END falls into the gesture-interpretation
+  // logic below and re-derives a snap target from stale
+  // scroll_origin_page_/scroll position, silently overriding the
+  // programmatic jump (e.g. landing on an AMS page instead of the intended
+  // dashboard on boot). pager_gesture_active_ is only set true by a real
+  // press (above) and only cleared once a real gesture actually finalizes
+  // (below), so it correctly stays true across a real gesture's own
+  // snap-animation follow-through while staying false for a fully
+  // programmatic scroll.
+  if (!pager_gesture_active_) {
+    scrolling_ = false;
+    publish_page_state_snapshot();
+    apply_page0_parallax(true);
+    apply_page_visibility();
     return;
   }
 
@@ -1257,6 +1282,10 @@ void Ui::handle_pager_event(lv_event_t* event) {
       return;
     }
   }
+  // Real gesture is finalizing now — clear before set_active_page() runs its
+  // own (programmatic, ANIM_OFF) scroll, so that scroll's own SCROLL_END
+  // doesn't get mistaken for a further real gesture.
+  pager_gesture_active_ = false;
   set_active_page(snap_page);
 }
 
