@@ -322,9 +322,6 @@ class PrinterPlugin : public Plugin {
   uint32_t last_rendered_ams_signature_ = UINT32_MAX;
   std::string last_ui_status_;
   bool last_print_active_ = false;
-  std::string last_diag_status_;
-  std::string last_diag_detail_;
-  std::string last_diag_stage_;
   lv_image_dsc_t preview_image_dsc_{};
   std::shared_ptr<std::vector<uint8_t>> last_preview_blob_{};
   std::shared_ptr<std::vector<uint8_t>> last_preview_raw_{};

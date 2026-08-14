@@ -1558,17 +1558,6 @@ void PrinterPlugin::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool 
 
   const std::string detail = detail_text(snapshot);
 
-  // [DIAG] Log what the display is actually showing — on change only.
-  if (status_text != last_diag_status_ || detail != last_diag_detail_ ||
-      snapshot.stage != last_diag_stage_) {
-    last_diag_status_ = status_text;
-    last_diag_detail_ = detail;
-    last_diag_stage_ = snapshot.stage;
-    ESP_LOGI(kTag, "[DIAG] display: status=%s stage=%s detail=%.60s lifecycle=%s",
-             status_text.c_str(), snapshot.stage.c_str(),
-             detail.empty() ? "(-)" : detail.c_str(),
-             to_string(snapshot.lifecycle));
-  }
   detail_visible_ = !detail.empty();
   if (detail_visible_) {
     // Scroll long error / HMS messages so the full TSV-resolved text is
