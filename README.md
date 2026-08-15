@@ -2,9 +2,8 @@
 
 InfoHub is a round/square ESP32-S3 info-display platform. Bambu Lab printer status is its flagship feature, but printer, weather (Tempest station or generic city/location) and stocks are each an independently toggleable plugin — pick the combination you want at build time.
 
-It works directly with Bambu Cloud, the printer's local connection, or both. Home Assistant is not required.
 
-(screenshots coming soon)
+![Mount](docs/1.png)
 
 Current version: **Alpha v0.1.0**
 
@@ -141,6 +140,6 @@ After initial setup, Web Config can be protected with a temporary six-digit PIN.
 ## Links
 
 - [InfoHub Web Installer](https://dreed47.github.io/InfoHub/flash/)
-- [MakerWorld model](https://makerworld.com/de/models/2517189-printsphere-bambu-status-display-standalone-1-75)
+- [MakerWorld model](https://makerworld.com/en/models/3175483-waveshare-amoled-1-75-test-development-mount)
 - [Building, cloning and manual flashing](docs/Build/README.md)
 - [License](LICENSE)
