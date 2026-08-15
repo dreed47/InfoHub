@@ -3,6 +3,8 @@
 
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
 
+#include <cstdlib>
+
 #include "cJSON.h"
 #include "infohub/config_store.hpp"
 #include "infohub/portal_shared.hpp"
@@ -49,6 +51,25 @@ esp_err_t StocksPlugin::handle_config_get(httpd_req_t* request) {
   body += ",\"last_fetch_ok\":";
   body += snapshot.last_fetch_ok ? "true" : "false";
   body += ",\"last_error\":\"" + json_escape(snapshot.last_error) + "\"";
+  {
+    // daily_limit/req_count_today are read directly from ConfigStore (not
+    // threaded through StockSnapshot) -- StockClient already persists both
+    // there for its own budget tracking, no need to duplicate them on the
+    // hot-path snapshot struct just for this portal display.
+    const std::string daily_limit_str =
+        plugin->config_store_->load_plugin_string(kPluginNs, "daily_limit");
+    body += ",\"daily_limit\":";
+    body += daily_limit_str.empty() ? "null" : daily_limit_str;
+    const std::string req_count_str =
+        plugin->config_store_->load_plugin_string(kPluginNs, "req_count");
+    body += ",\"req_count_today\":" + (req_count_str.empty() ? std::string("0") : req_count_str);
+  }
+  body += ",\"budget_exhausted\":";
+  body += snapshot.budget_exhausted ? "true" : "false";
+  body += ",\"last_success_ago_s\":";
+  body += snapshot.last_success_ms == 0
+              ? "null"
+              : std::to_string((now_ms() - snapshot.last_success_ms) / 1000);
   body += ",\"quotes\":[";
   for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
     if (i > 0) {
@@ -98,17 +119,33 @@ esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
     }
   }
   const std::string submitted_api_token = read_string_field(root, "api_token");
+  const std::string daily_limit_field = trim_copy(read_string_field(root, "daily_limit"));
   cJSON_Delete(root);
 
   const std::string stored_api_token =
       plugin->config_store_->load_plugin_string(kPluginNs, "api_token");
   const std::string api_token = merge_secret(submitted_api_token, stored_api_token);
 
+  // Garbage/zero/negative input is treated as "unlimited" rather than
+  // rejected outright -- lenient-parse-with-sane-fallback, consistent with
+  // how this codebase's other numeric fields (e.g. poll_s) handle bad
+  // input elsewhere. A blank field is the expected "paid account, no cap"
+  // case, not an error.
+  uint32_t daily_limit = 0;
+  if (!daily_limit_field.empty()) {
+    const long parsed = std::strtol(daily_limit_field.c_str(), nullptr, 10);
+    if (parsed > 0) {
+      daily_limit = static_cast<uint32_t>(parsed);
+    }
+  }
+  const std::string daily_limit_to_store = daily_limit == 0 ? "" : std::to_string(daily_limit);
+
   for (uint8_t i = 0; i < kStockSymbolCount; ++i) {
     const std::string key = "symbol" + std::to_string(i + 1);
     plugin->config_store_->save_plugin_string(kPluginNs, key.c_str(), symbols[i]);
   }
   plugin->config_store_->save_plugin_string(kPluginNs, "api_token", api_token);
+  plugin->config_store_->save_plugin_string(kPluginNs, "daily_limit", daily_limit_to_store);
 
   // Only actually push credentials/symbols to the client (and let it start
   // fetching) if the plugin is currently enabled -- otherwise a save while
@@ -116,7 +153,7 @@ esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
   // load_config() had. handle_enabled_post() pushes the up-to-date stored
   // values in when the user later flips it back on.
   if (plugin->enabled()) {
-    plugin->client_.configure(symbols, api_token);
+    plugin->client_.configure(symbols, api_token, daily_limit);
   }
 
   send_json(request, "{\"status\":\"saved\"}");
@@ -160,9 +197,15 @@ esp_err_t StocksPlugin::handle_enabled_post(httpd_req_t* request) {
       symbols[i] = plugin->config_store_->load_plugin_string(kPluginNs, key.c_str());
     }
     const std::string api_token = plugin->config_store_->load_plugin_string(kPluginNs, "api_token");
-    plugin->client_.configure(symbols, api_token);
+    const std::string daily_limit_str =
+        plugin->config_store_->load_plugin_string(kPluginNs, "daily_limit");
+    uint32_t daily_limit = 0;
+    if (!daily_limit_str.empty()) {
+      daily_limit = static_cast<uint32_t>(std::strtoul(daily_limit_str.c_str(), nullptr, 10));
+    }
+    plugin->client_.configure(symbols, api_token, daily_limit);
   } else {
-    plugin->client_.configure({}, "");
+    plugin->client_.configure({}, "", 0);
   }
 
   if (!enabled && plugin->ui_ != nullptr) {

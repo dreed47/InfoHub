@@ -14,6 +14,7 @@ namespace infohub {
 
 class WifiManager;
 class NetworkArbiter;
+class ConfigStore;
 
 constexpr uint8_t kStockSymbolCount = 4;
 
@@ -42,6 +43,18 @@ struct StockSnapshot {
   bool last_fetch_ok = false;
   std::string last_error;
   uint64_t last_fetch_ms = 0;
+  // esp_timer_get_time()-based (boot-relative, not wall-clock -- same units
+  // as last_fetch_ms above), set only when at least one symbol's quote
+  // actually refreshed this cycle. Drives the "Updated Xm ago" display --
+  // unlike last_fetch_ms (every attempt), this never regresses on a failed
+  // or budget-skipped cycle, so it always reflects how old the data
+  // currently on screen really is.
+  uint64_t last_success_ms = 0;
+  // True if the daily API-request budget (see StockClient::configure()'s
+  // daily_limit param) stopped at least one symbol's fetch this cycle.
+  // Recomputed fresh every fetch_once() call -- does not stick once the
+  // budget resets the next day.
+  bool budget_exhausted = false;
   std::array<StockQuote, kStockSymbolCount> quotes{};
 };
 
@@ -56,6 +69,10 @@ struct StockSnapshot {
 // weekday schedule rather than a free-running interval -- see
 // kScheduleSlots in stock_client.cpp (10:00, 12:00, 14:30, 17:00 US
 // Eastern time, Mon-Fri only; markets/quote data don't move on weekends).
+// On top of the schedule, configure()'s daily_limit param enforces an
+// actual NVS-persisted request counter (reset at US-Eastern midnight) so
+// reconfigures/reboots can't silently exceed a user-set cap either -- see
+// consume_budget_slot_if_available_locked()/record_budget_consumed_locked().
 // The schedule is pinned to true Eastern time via its own UTC-based DST
 // arithmetic (see eastern_utc_offset_seconds() in stock_client.cpp) --
 // independent of the device's own display timezone (Web Config's
@@ -80,14 +97,26 @@ class StockClient {
   // Shared handshake-serialization slot -- see NetworkArbiter. May be null
   // (falls back to unconditional connect, same as before this existed).
   void set_network_arbiter(NetworkArbiter* arbiter) { network_arbiter_ = arbiter; }
+  // Persists the daily API-request budget counter across reboots (keys
+  // "req_count"/"req_day" under this plugin's "stocks" NVS namespace) --
+  // same const-ConfigStore*-for-a-client's-own-persistence pattern
+  // BambuCloudClient::set_config_store() already uses. May be null (budget
+  // tracking then stays in-memory only for that boot -- degrades gracefully
+  // rather than crashing).
+  void set_config_store(const ConfigStore* config_store) { config_store_ = config_store; }
 
-  // Sets symbols/api_key and wakes the task for an immediate first fetch.
-  // Empty entries in `symbols` are skipped when fetching. Passing an empty
-  // api_key, or all-empty symbols, marks the client unconfigured (task
-  // idles, snapshot().configured stays false). Subsequent fetches follow
-  // the fixed weekday schedule (see class comment), not this call.
+  // Sets symbols/api_key/daily_limit and wakes the task for an immediate
+  // first fetch. Empty entries in `symbols` are skipped when fetching.
+  // Passing an empty api_key, or all-empty symbols, marks the client
+  // unconfigured (task idles, snapshot().configured stays false).
+  // Subsequent fetches follow the fixed weekday schedule (see class
+  // comment), not this call. `daily_limit`: 0 = unlimited (no budget
+  // check). Non-zero caps the number of requests that actually reach
+  // Alpha Vantage's server per US-Eastern day (see fetch_once()) --
+  // covers every request this client makes, including the immediate
+  // fetch this call itself may trigger.
   void configure(const std::array<std::string, kStockSymbolCount>& symbols,
-                 const std::string& api_key);
+                 const std::string& api_key, uint32_t daily_limit);
 
   StockSnapshot snapshot() const;
 
@@ -98,14 +127,29 @@ class StockClient {
   bool perform_json_request(const std::string& url, int* status_code,
                             std::string* response_body);
   bool parse_quote_response(const std::string& body, StockQuote* out);
+  // Both assume config_mutex_ is already held by the caller. Returns true
+  // if a request is allowed to proceed (and, as a side effect, rolls the
+  // counter over to a fresh US-Eastern day if one has started since the
+  // last check). daily_limit_ == 0 always returns true without touching
+  // the counter at all -- no NVS writes for an unlimited account.
+  bool consume_budget_slot_if_available_locked();
+  // Called only after a request that actually reached Alpha Vantage's
+  // server (got any HTTP response back) -- see class comment on why a
+  // rate-limit/bad-key response still counts.
+  void record_budget_consumed_locked();
 
   TaskHandle_t task_handle_ = nullptr;
   const WifiManager* wifi_manager_ = nullptr;
   NetworkArbiter* network_arbiter_ = nullptr;
+  const ConfigStore* config_store_ = nullptr;
 
   mutable std::mutex config_mutex_;
   std::array<std::string, kStockSymbolCount> symbols_{};
   std::string api_key_;
+  uint32_t daily_limit_ = 0;
+  uint32_t req_count_today_ = 0;
+  int req_day_key_ = 0;          // 0 = not yet loaded from NVS
+  bool budget_state_loaded_ = false;
   std::atomic<bool> reconfigure_requested_{false};
 
   mutable std::mutex snapshot_mutex_;

@@ -1916,7 +1916,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   if (wifi_configured) {
     begin_collapsible_section(
         "Stocks",
-        "Up to 4 ticker symbols via Alpha Vantage's cloud API. Free-tier accounts are capped at 25 requests/day, so refreshes run on a fixed schedule: weekdays at 10:00, 12:00, 14:30 and 17:00 US Eastern time (market hours) -- not user-configurable.",
+        "Up to 4 ticker symbols via Alpha Vantage's cloud API. Refreshes run on a fixed schedule: weekdays at 10:00, 12:00, 14:30 and 17:00 US Eastern time (market hours) -- not user-configurable. Free-tier accounts are capped at 25 requests/day; set that below to keep this device under your account's actual limit, or leave it blank if you're on a paid/unlimited plan.",
         "Setup", "idle", false, "stocks-section-pill");
     html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"stocks_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
     html += "<div class=\"grid-2\">";
@@ -1926,9 +1926,10 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "<div class=\"field\"><label for=\"stocks_symbol4\">Symbol 4</label><input id=\"stocks_symbol4\" value=\"\" autocomplete=\"off\" placeholder=\"AMZN\"></div>";
     html += "</div>";
     html += "<div class=\"field\"><label for=\"stocks_api_token\">Alpha Vantage API Key</label><input id=\"stocks_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved key\" autocomplete=\"off\"></div>";
+    html += "<div class=\"field\"><label for=\"stocks_daily_limit\">API Requests/Day (optional)</label><input id=\"stocks_daily_limit\" type=\"number\" min=\"1\" value=\"25\" placeholder=\"Leave blank if unlimited (paid account)\"></div>";
     html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"stocks-detail\">Not configured</span></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"stocks-save-button\">Save Stocks Settings</button>";
-    html += "<div class=\"micro\">Saves symbols and API key, then fetches immediately. Later refreshes follow the fixed weekday schedule above.</div></div>";
+    html += "<div class=\"micro\">Saves symbols, API key and daily request limit, then fetches immediately. Later refreshes follow the fixed weekday schedule above.</div></div>";
     end_collapsible_section();
   }
 #endif
@@ -2693,13 +2694,20 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "if(inp)inp.value=symbols[i]||'';}"
           "const enabledInput=document.getElementById('stocks_enabled');"
           "if(enabledInput)enabledInput.checked=body.enabled!==false;"
+          "const limitInput=document.getElementById('stocks_daily_limit');"
+          "if(limitInput)limitInput.value=body.daily_limit!=null?body.daily_limit:'';"
           "stocksLoaded=true;}"
           "setBadge('stocks-badge','Stocks',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
           "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
           "const detailEl=document.getElementById('stocks-detail');"
           "if(detailEl){if(!body.configured){detailEl.textContent='Not configured';}"
           "else{const quotes=(body.quotes||[]).filter(q=>q.has_data);"
-          "if(quotes.length){detailEl.textContent=quotes.map(q=>q.symbol+' '+q.price.toFixed(2)).join('  \\u00b7  ');}"
+          "if(quotes.length){let text=quotes.map(q=>q.symbol+' '+q.price.toFixed(2)).join('  \\u00b7  ');"
+          "if(body.daily_limit!=null){text+='  \\u00b7  '+body.req_count_today+'/'+body.daily_limit+' today';}"
+          "if(body.last_success_ago_s!=null){const s=body.last_success_ago_s;"
+          "const ago=s<60?'just now':(s<3600?Math.floor(s/60)+'m ago':(s<86400?Math.floor(s/3600)+'h ago':Math.floor(s/86400)+'d ago'));"
+          "text+='  \\u00b7  '+(body.budget_exhausted?'limit reached, data from '+ago:'updated '+ago);}"
+          "detailEl.textContent=text;}"
           "else{detailEl.textContent=body.last_error||'Waiting for first fetch...';}}}}"
           "catch(error){}}";
   html += "const stocksSaveButton=document.getElementById('stocks-save-button');";
@@ -2710,7 +2718,8 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "await fetch('/api/plugins/stocks/config',{method:'POST',credentials:'same-origin',"
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
           "symbols:symbols,"
-          "api_token:document.getElementById('stocks_api_token').value})});"
+          "api_token:document.getElementById('stocks_api_token').value,"
+          "daily_limit:document.getElementById('stocks_daily_limit').value})});"
           "document.getElementById('stocks_api_token').value='';"
           "await loadStocksStatus();}"
           "catch(error){}finally{stocksSaveButton.disabled=false;}});}";

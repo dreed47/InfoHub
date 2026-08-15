@@ -1,8 +1,10 @@
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "infohub/ui.hpp"
 #include "infohub/ui_toolkit.hpp"
 
@@ -35,6 +37,29 @@ constexpr char kPluginNs[] = "stocks";
 constexpr uint32_t kGreenHex = 0x00E676;
 constexpr uint32_t kRedHex = 0xFF3D3D;
 constexpr uint32_t kNeutralHex = 0x888888;
+
+uint64_t now_ms() {
+  return static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+}
+
+// "5m ago", "2h ago", "just now" -- StockSnapshot::last_success_ms is
+// esp_timer_get_time()-based (boot-relative), so this is a duration since
+// that snapshot was taken, not a wall-clock/timezone computation.
+std::string relative_time_text(uint64_t ago_ms) {
+  const uint64_t seconds = ago_ms / 1000;
+  if (seconds < 60) {
+    return "just now";
+  }
+  const uint64_t minutes = seconds / 60;
+  if (minutes < 60) {
+    return std::to_string(minutes) + "m ago";
+  }
+  const uint64_t hours = minutes / 60;
+  if (hours < 24) {
+    return std::to_string(hours) + "h ago";
+  }
+  return std::to_string(hours / 24) + "d ago";
+}
 }  // namespace
 
 esp_err_t StocksPlugin::init(PluginContext& ctx) {
@@ -45,6 +70,7 @@ esp_err_t StocksPlugin::init(PluginContext& ctx) {
 
   client_.set_wifi_manager(wifi_manager_);
   client_.set_network_arbiter(&ctx.network_arbiter);
+  client_.set_config_store(config_store_);
   load_config();
 
   const esp_err_t err = client_.start();
@@ -64,6 +90,11 @@ void StocksPlugin::load_config() {
     symbols[i] = config_store_->load_plugin_string(kPluginNs, key.c_str());
   }
   const std::string api_key = config_store_->load_plugin_string(kPluginNs, "api_token");
+  const std::string daily_limit_str = config_store_->load_plugin_string(kPluginNs, "daily_limit");
+  uint32_t daily_limit = 0;
+  if (!daily_limit_str.empty()) {
+    daily_limit = static_cast<uint32_t>(std::strtoul(daily_limit_str.c_str(), nullptr, 10));
+  }
 
   // Read/apply the enabled flag BEFORE configuring the client -- StockClient
   // has no concept of Plugin::enabled_ itself, only "has symbols+key or
@@ -75,9 +106,9 @@ void StocksPlugin::load_config() {
   const bool enabled = config_store_->load_plugin_string(kPluginNs, "enabled") != "0";
   set_enabled(enabled);
   if (enabled) {
-    client_.configure(symbols, api_key);
+    client_.configure(symbols, api_key, daily_limit);
   } else {
-    client_.configure({}, "");
+    client_.configure({}, "", 0);
   }
 }
 
@@ -197,8 +228,16 @@ void StocksPlugin::update_ui() {
   }
 
   if (any_data) {
-    lv_label_set_text(status_label_,
-                      snapshot.last_fetch_ok ? "" : "Last update failed - showing stale data");
+    const std::string ago = relative_time_text(now_ms() - snapshot.last_success_ms);
+    std::string status;
+    if (snapshot.budget_exhausted) {
+      status = "Daily API limit reached - showing data from " + ago;
+    } else if (!snapshot.last_fetch_ok) {
+      status = "Last update failed - showing data from " + ago;
+    } else {
+      status = "Updated " + ago;
+    }
+    lv_label_set_text(status_label_, status.c_str());
   } else {
     lv_label_set_text(status_label_,
                       snapshot.last_error.empty() ? "Waiting for first fetch..."

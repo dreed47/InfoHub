@@ -9,6 +9,7 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "infohub/config_store.hpp"
 #include "infohub/network_arbiter.hpp"
 #include "infohub/wifi_manager.hpp"
 
@@ -25,6 +26,12 @@ namespace infohub {
 
 namespace {
 constexpr char kTag[] = "infohub.stocks";
+// Same NVS namespace StocksPlugin/its portal handlers use for "symbol1"
+// etc. (kPluginNs in stocks_plugin.cpp/stocks_plugin_portal.cpp) -- the
+// budget counter is client-owned persistence, same shape as
+// BambuCloudClient's own config_store_ usage, but lives in the plugin's
+// existing namespace rather than inventing a new one.
+constexpr char kPluginNs[] = "stocks";
 constexpr size_t kMaxJsonResponseBytes = 8U * 1024U;
 constexpr char kUrlPrefix[] = "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=";
 
@@ -110,6 +117,21 @@ std::time_t latest_due_slot(std::time_t now) {
   return best;
 }
 
+// YYYYMMDD in US-Eastern wall-clock terms (see eastern_utc_offset_seconds
+// above) -- used purely to detect a day rollover for the daily
+// request-budget counter. Alpha Vantage's quota resets at US Eastern
+// midnight, not UTC midnight, so this deliberately doesn't just use
+// std::time(nullptr)'s own UTC date fields.
+int eastern_date_key(std::time_t now) {
+  const int offset_s = eastern_utc_offset_seconds(now);
+  const std::time_t eastern_shifted = now + offset_s;
+  struct tm eastern_tm {};
+  if (gmtime_r(&eastern_shifted, &eastern_tm) == nullptr) {
+    return 0;
+  }
+  return (eastern_tm.tm_year + 1900) * 10000 + (eastern_tm.tm_mon + 1) * 100 + eastern_tm.tm_mday;
+}
+
 // Alpha Vantage returns quote fields as JSON strings (e.g. "05. price":
 // "172.4500"), not numbers -- strtod, not cJSON_IsNumber/valuedouble.
 bool read_string_number(const cJSON* object, const char* key, double* out) {
@@ -141,11 +163,12 @@ esp_err_t StockClient::start() {
 }
 
 void StockClient::configure(const std::array<std::string, kStockSymbolCount>& symbols,
-                            const std::string& api_key) {
+                            const std::string& api_key, uint32_t daily_limit) {
   {
     std::lock_guard<std::mutex> lock(config_mutex_);
     symbols_ = symbols;
     api_key_ = api_key;
+    daily_limit_ = daily_limit;
   }
   reconfigure_requested_.store(true);
   if (task_handle_ != nullptr) {
@@ -160,6 +183,47 @@ StockSnapshot StockClient::snapshot() const {
 
 void StockClient::task_entry(void* context) {
   static_cast<StockClient*>(context)->task_loop();
+}
+
+bool StockClient::consume_budget_slot_if_available_locked() {
+  if (!budget_state_loaded_) {
+    if (config_store_ != nullptr) {
+      const std::string count_str = config_store_->load_plugin_string(kPluginNs, "req_count");
+      const std::string day_str = config_store_->load_plugin_string(kPluginNs, "req_day");
+      if (!count_str.empty()) {
+        req_count_today_ = static_cast<uint32_t>(std::strtoul(count_str.c_str(), nullptr, 10));
+      }
+      if (!day_str.empty()) {
+        req_day_key_ = std::atoi(day_str.c_str());
+      }
+    }
+    budget_state_loaded_ = true;
+  }
+
+  const int today_key = eastern_date_key(std::time(nullptr));
+  if (today_key != req_day_key_) {
+    req_count_today_ = 0;
+    req_day_key_ = today_key;
+    if (config_store_ != nullptr) {
+      config_store_->save_plugin_string(kPluginNs, "req_count", "0");
+      config_store_->save_plugin_string(kPluginNs, "req_day", std::to_string(req_day_key_));
+    }
+  }
+
+  if (daily_limit_ == 0) {
+    return true;  // unlimited -- counter tracked above for day-rollover only, never gates
+  }
+  return req_count_today_ < daily_limit_;
+}
+
+void StockClient::record_budget_consumed_locked() {
+  if (daily_limit_ == 0) {
+    return;
+  }
+  ++req_count_today_;
+  if (config_store_ != nullptr) {
+    config_store_->save_plugin_string(kPluginNs, "req_count", std::to_string(req_count_today_));
+  }
 }
 
 void StockClient::task_loop() {
@@ -253,6 +317,7 @@ bool StockClient::fetch_once() {
   StockSnapshot updated = snapshot();
   updated.configured = true;
   updated.last_fetch_ms = now_ms();
+  updated.budget_exhausted = false;
   bool any_ok = false;
   bool any_attempted = false;
 
@@ -270,11 +335,35 @@ bool StockClient::fetch_once() {
     // known-good price/color on screen rather than blanking it.
     const bool same_symbol_as_before = updated.quotes[i].symbol == symbols[i];
 
+    bool budget_available = true;
+    {
+      std::lock_guard<std::mutex> lock(config_mutex_);
+      budget_available = consume_budget_slot_if_available_locked();
+    }
+    if (!budget_available) {
+      ESP_LOGW(kTag, "Daily API budget exhausted (%u/%u) -- skipping %s", req_count_today_,
+               daily_limit_, symbols[i].c_str());
+      updated.budget_exhausted = true;
+      // updated.quotes[i] already holds the prior cycle's data (cloned from
+      // snapshot() above) -- same preserve-old-data behavior the
+      // same_symbol_as_before path below relies on, just reached without
+      // ever attempting the request.
+      continue;
+    }
+
     const std::string url =
         std::string(kUrlPrefix) + symbols[i] + "&apikey=" + api_key;
     int status_code = 0;
     std::string response_body;
     const bool request_ok = perform_json_request(url, &status_code, &response_body);
+    if (request_ok) {
+      // Reached Alpha Vantage's server and got a response back -- billed
+      // against the daily quota the instant it arrived, whether or not the
+      // body turned out to contain real quote data (a rate-limit/bad-key/
+      // bad-symbol response below is itself request N, not a free retry).
+      std::lock_guard<std::mutex> lock(config_mutex_);
+      record_budget_consumed_locked();
+    }
 
     StockQuote quote;
     quote.symbol = symbols[i];
@@ -323,6 +412,12 @@ bool StockClient::fetch_once() {
 
   updated.last_fetch_ok = any_ok;
   updated.last_error = any_ok ? "" : (any_attempted ? "No symbols returned data" : "");
+  if (any_ok) {
+    // Never regresses on a failed or budget-skipped cycle -- always
+    // reflects how old the data actually on screen currently is (see
+    // StockSnapshot::last_success_ms's doc comment).
+    updated.last_success_ms = updated.last_fetch_ms;
+  }
 
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
