@@ -31,10 +31,9 @@ class WeatherPlugin : public Plugin {
   bool wants_awake() const override { return false; }
   uint32_t desired_poll_interval_ms() const override { return 5000; }
 
-  // page_index 0: temp/humidity/pressure summary. page_index 1: wind/UV/
-  // precip/station-battery. page_index 2: next-4-hours forecast strip
-  // (WeatherFlowClient's better_forecast fetch).
-  uint8_t page_count() const override { return 3; }
+  // page_index 0: temp/humidity/pressure summary. page_index 1: next-4-hours
+  // forecast strip (WeatherFlowClient's better_forecast fetch).
+  uint8_t page_count() const override { return 2; }
   void build_tile(lv_obj_t*) override {}
   void build_screen(lv_obj_t* parent, uint8_t page_index) override;
   void register_portal_routes(httpd_handle_t server) override;
@@ -84,13 +83,12 @@ class WeatherPlugin : public Plugin {
   lv_obj_t* detail_label_ = nullptr;
   lv_obj_t* status_label_ = nullptr;
 
-  // Page 1 widgets — wind/UV/precip/station-battery.
-  lv_obj_t* extra_title_label_ = nullptr;
-  lv_obj_t* extra_detail_label_ = nullptr;
-
-  // Page 2 widgets — one column per forecast hour: time, temp, conditions
-  // (text, not icons — see the plan doc for why).
+  // Page 1 widgets — one card per forecast hour: time, temp, conditions
+  // (text, not icons — see the plan doc for why). card is the colored
+  // background tile, recolored per entry.icon in update_ui() since icon
+  // data isn't known yet at build_screen() time.
   struct ForecastColumn {
+    lv_obj_t* card = nullptr;
     lv_obj_t* time_label = nullptr;
     lv_obj_t* temp_label = nullptr;
     lv_obj_t* conditions_label = nullptr;

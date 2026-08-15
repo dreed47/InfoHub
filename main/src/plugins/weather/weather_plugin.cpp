@@ -151,51 +151,56 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
     return;
   }
 
-  if (page_index == 2) {
-    // Horizontal scroll strip -- native LVGL scroll+snap here (unlike the
-    // outer pager, which deliberately uses LV_SCROLL_SNAP_NONE + its own
-    // gesture logic to avoid double-animation jitter across plugin pages;
-    // this is a single self-contained widget with no such conflict).
-    lv_obj_t* strip = lv_obj_create(parent);
-    lv_obj_set_size(strip, board::kDisplayWidth - 40, 160);
-    lv_obj_center(strip);
-    lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(strip, 0, 0);
-    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
-    lv_obj_set_scroll_dir(strip, LV_DIR_HOR);
-    lv_obj_set_scroll_snap_x(strip, LV_SCROLL_SNAP_START);
-    lv_obj_set_scrollbar_mode(strip, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_set_style_pad_column(strip, 16, 0);
+  if (page_index == 1) {
+    // Row of kHourlyForecastCount fixed cards (no scroll -- with only 4
+    // entries they all fit, so a static row fills the round page evenly
+    // instead of leaving a half-scrolled strip). Each card is a rounded
+    // tile tinted by that hour's condition color (set in update_ui(), since
+    // entry.icon isn't known yet here) so the row reads as a color-coded
+    // strip at a glance, not just a wall of text.
+    lv_obj_t* row = lv_obj_create(parent);
+    lv_obj_set_size(row, board::kDisplayWidth - 24, 300);
+    lv_obj_center(row);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 10, 0);
 
     for (uint8_t i = 0; i < kHourlyForecastCount; ++i) {
-      lv_obj_t* col = lv_obj_create(strip);
-      lv_obj_set_size(col, 90, LV_SIZE_CONTENT);
-      lv_obj_set_style_bg_opa(col, LV_OPA_TRANSP, 0);
-      lv_obj_set_style_border_width(col, 0, 0);
-      lv_obj_clear_flag(col, LV_OBJ_FLAG_SCROLLABLE);
-      lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-      lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-      lv_obj_set_style_pad_row(col, 6, 0);
-
       ForecastColumn& fc = forecast_columns_[i];
 
-      fc.time_label = lv_label_create(col);
-      lv_label_set_text(fc.time_label, "--");
-      lv_obj_set_style_text_font(fc.time_label, &dosis_20, 0);
-      lv_obj_set_style_text_color(fc.time_label, lv_color_hex(0x999999), 0);
+      fc.card = lv_obj_create(row);
+      lv_obj_set_size(fc.card, 96, 280);
+      lv_obj_set_style_radius(fc.card, 18, 0);
+      lv_obj_set_style_bg_color(fc.card, lv_color_hex(kConditionArcNeutralHex), 0);
+      lv_obj_set_style_bg_opa(fc.card, LV_OPA_30, 0);
+      lv_obj_set_style_border_width(fc.card, 0, 0);
+      lv_obj_clear_flag(fc.card, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_flex_flow(fc.card, LV_FLEX_FLOW_COLUMN);
+      lv_obj_set_flex_align(fc.card, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+      lv_obj_set_style_pad_row(fc.card, 4, 0);
+      lv_obj_set_style_pad_top(fc.card, 14, 0);
+      lv_obj_set_style_pad_bottom(fc.card, 14, 0);
 
-      fc.temp_label = lv_label_create(col);
+      fc.time_label = lv_label_create(fc.card);
+      lv_label_set_text(fc.time_label, "--");
+      lv_obj_set_style_text_font(fc.time_label, &dosis_32, 0);
+      lv_obj_set_style_text_color(fc.time_label, lv_color_hex(0xCCCCCC), 0);
+
+      fc.temp_label = lv_label_create(fc.card);
       lv_label_set_text(fc.temp_label, "--");
-      lv_obj_set_style_text_font(fc.temp_label, &dosis_32, 0);
+      lv_obj_set_style_text_font(fc.temp_label, &dosis_40, 0);
       lv_obj_set_style_text_color(fc.temp_label, lv_color_hex(0xFFFFFF), 0);
 
-      fc.conditions_label = lv_label_create(col);
+      fc.conditions_label = lv_label_create(fc.card);
       lv_label_set_text(fc.conditions_label, "");
-      lv_obj_set_width(fc.conditions_label, 90);
+      lv_obj_set_width(fc.conditions_label, 88);
       lv_label_set_long_mode(fc.conditions_label, LV_LABEL_LONG_WRAP);
       lv_obj_set_style_text_align(fc.conditions_label, LV_TEXT_ALIGN_CENTER, 0);
       lv_obj_set_style_text_font(fc.conditions_label, &dosis_20, 0);
-      lv_obj_set_style_text_color(fc.conditions_label, lv_color_hex(0xCCCCCC), 0);
+      lv_obj_set_style_text_color(fc.conditions_label, lv_color_hex(0xEEEEEE), 0);
     }
 
     return;
@@ -231,43 +236,28 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   lv_obj_set_style_pad_row(column, 8, 0);
   lv_obj_center(column);
 
-  if (page_index == 0) {
-    temp_label_ = lv_label_create(column);
-    lv_label_set_text(temp_label_, "--");
-    lv_obj_set_style_text_font(temp_label_, &dosis_64, 0);
-    lv_obj_set_style_text_color(temp_label_, lv_color_hex(0xFFFFFF), 0);
+  temp_label_ = lv_label_create(column);
+  lv_label_set_text(temp_label_, "--");
+  lv_obj_set_style_text_font(temp_label_, &dosis_64, 0);
+  lv_obj_set_style_text_color(temp_label_, lv_color_hex(0xFFFFFF), 0);
 
-    condition_text_label_ = lv_label_create(column);
-    lv_label_set_text(condition_text_label_, "");
-    lv_obj_set_style_text_font(condition_text_label_, &dosis_32, 0);
-    lv_obj_set_style_text_color(condition_text_label_, lv_color_hex(0xEEEEEE), 0);
+  condition_text_label_ = lv_label_create(column);
+  lv_label_set_text(condition_text_label_, "");
+  lv_obj_set_style_text_font(condition_text_label_, &dosis_32, 0);
+  lv_obj_set_style_text_color(condition_text_label_, lv_color_hex(0xEEEEEE), 0);
 
-    detail_label_ = lv_label_create(column);
-    lv_label_set_text(detail_label_, "");
-    lv_obj_set_style_text_font(detail_label_, &dosis_20, 0);
-    lv_obj_set_style_text_color(detail_label_, lv_color_hex(0xCCCCCC), 0);
+  detail_label_ = lv_label_create(column);
+  lv_label_set_text(detail_label_, "");
+  lv_obj_set_style_text_font(detail_label_, &dosis_20, 0);
+  lv_obj_set_style_text_color(detail_label_, lv_color_hex(0xCCCCCC), 0);
 
-    status_label_ = lv_label_create(column);
-    lv_label_set_text(status_label_, "Not configured");
-    lv_obj_set_width(status_label_, 320);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(status_label_, &dosis_20, 0);
-    lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
-  } else {
-    extra_title_label_ = lv_label_create(column);
-    lv_label_set_text(extra_title_label_, "Wind & More");
-    lv_obj_set_style_text_font(extra_title_label_, &dosis_40, 0);
-    lv_obj_set_style_text_color(extra_title_label_, lv_color_hex(0xFFFFFF), 0);
-
-    extra_detail_label_ = lv_label_create(column);
-    lv_label_set_text(extra_detail_label_, "--");
-    lv_obj_set_width(extra_detail_label_, 320);
-    lv_label_set_long_mode(extra_detail_label_, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_align(extra_detail_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(extra_detail_label_, &dosis_20, 0);
-    lv_obj_set_style_text_color(extra_detail_label_, lv_color_hex(0xCCCCCC), 0);
-  }
+  status_label_ = lv_label_create(column);
+  lv_label_set_text(status_label_, "Not configured");
+  lv_obj_set_width(status_label_, 320);
+  lv_label_set_long_mode(status_label_, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(status_label_, &dosis_20, 0);
+  lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
 }
 
 void WeatherPlugin::update_ui() {
@@ -329,34 +319,6 @@ void WeatherPlugin::update_ui() {
     }
   }
 
-  if (extra_detail_label_ != nullptr) {
-    std::string extra;
-    if (snapshot.has_wind) {
-      char wind_buf[64];
-      std::snprintf(wind_buf, sizeof(wind_buf), "Wind: %.1f m/s (gust %.1f) @ %.0f\xC2\xB0\n",
-                    snapshot.wind_avg_mps, snapshot.wind_gust_mps, snapshot.wind_direction_deg);
-      extra += wind_buf;
-    }
-    if (snapshot.has_uv) {
-      char uv_buf[32];
-      std::snprintf(uv_buf, sizeof(uv_buf), "UV index: %.1f\n", snapshot.uv_index);
-      extra += uv_buf;
-    }
-    if (snapshot.has_precip) {
-      char precip_buf[48];
-      std::snprintf(precip_buf, sizeof(precip_buf), "Precip: %.2f mm\n",
-                    snapshot.precip_accumulated_mm);
-      extra += precip_buf;
-    }
-    if (snapshot.has_battery) {
-      char battery_buf[32];
-      std::snprintf(battery_buf, sizeof(battery_buf), "Station battery: %.2f V",
-                    snapshot.battery_volts);
-      extra += battery_buf;
-    }
-    lv_label_set_text(extra_detail_label_, extra.empty() ? "--" : extra.c_str());
-  }
-
   if (snapshot.has_forecast) {
     for (uint8_t i = 0; i < kHourlyForecastCount; ++i) {
       const HourlyForecastEntry& entry = snapshot.hourly_forecast[i];
@@ -368,6 +330,9 @@ void WeatherPlugin::update_ui() {
         lv_label_set_text(fc.time_label, "--");
         lv_label_set_text(fc.temp_label, "--");
         lv_label_set_text(fc.conditions_label, "");
+        if (fc.card != nullptr) {
+          lv_obj_set_style_bg_color(fc.card, lv_color_hex(kConditionArcNeutralHex), 0);
+        }
         continue;
       }
       lv_label_set_text(fc.time_label, hour_label_text(entry.time_unix).c_str());
@@ -382,6 +347,13 @@ void WeatherPlugin::update_ui() {
         conditions_text += precip_buf;
       }
       lv_label_set_text(fc.conditions_label, conditions_text.c_str());
+
+      const uint32_t card_color =
+          entry.icon.empty() ? kConditionArcNeutralHex : condition_color_for_icon(entry.icon);
+      if (fc.card != nullptr) {
+        lv_obj_set_style_bg_color(fc.card, lv_color_hex(card_color), 0);
+      }
+      lv_obj_set_style_text_color(fc.temp_label, lv_color_hex(card_color), 0);
     }
   }
 }
