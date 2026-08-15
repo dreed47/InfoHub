@@ -129,7 +129,7 @@ class PrinterPlugin : public Plugin {
   static esp_err_t handle_plugin_printer_config_get(httpd_req_t* request);
   // Separate from the config GET/the other printer POST routes above (those
   // all trigger a reboot on change) — this one applies live, same shape as
-  // WeatherPlugin's enabled toggle.
+  // TempestPlugin's enabled toggle.
   static esp_err_t handle_enabled_post(httpd_req_t* request);
   // Per-event enable/upload/clear for this plugin's 8 built-in AudioNotifier
   // events — moved here from SetupPortal (see audio_event_enabled() above).

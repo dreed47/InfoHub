@@ -22,7 +22,7 @@ constexpr uint8_t kHourlyForecastCount = 4;
 // (forecast.hourly[]). `has_data` is set only if the entry parsed with at
 // least a temperature reading. `icon` is WeatherFlow's small fixed enum
 // (e.g. "clear-day", "rainy", "possibly-thunderstorm-night" -- see
-// condition_color_for_icon() in weather_plugin.cpp for the full set), not
+// condition_color_for_icon() in tempest_plugin.cpp for the full set), not
 // the free-text `conditions` string, which has too many phrasings ("Partly
 // Cloudy", "Rain Likely", ...) to map to a color reliably.
 struct HourlyForecastEntry {
@@ -40,7 +40,7 @@ struct HourlyForecastEntry {
 // (everything past the three confirmed-by-docs core readings) carry their own
 // presence flag because the exact field-name set returned by WeatherFlow's
 // named-field observation endpoint wasn't fully confirmed against a live
-// response while building this — see weather_flow_client.cpp's parse comment.
+// response while building this — see this file's own .cpp parse comment.
 struct WeatherFlowSnapshot {
   bool configured = false;
   bool last_fetch_ok = false;
@@ -74,7 +74,7 @@ struct WeatherFlowSnapshot {
 
   // better_forecast's top-level current_conditions object -- fetched on the
   // same request/cadence as hourly_forecast above (no extra API call).
-  // Drives the main page's condition-color ring (see weather_plugin.cpp).
+  // Drives the main page's condition-color ring (see tempest_plugin.cpp).
   bool has_current_conditions = false;
   std::string current_icon;
   std::string current_conditions_text;
@@ -84,7 +84,7 @@ struct WeatherFlowSnapshot {
 // observations/station/{station_id}?api_key=...) for one station's latest
 // observation, on its own FreeRTOS task — mirrors BambuCloudClient/
 // PrinterClient's own-task pattern so the blocking HTTPS call never runs on
-// the shared Application loop (WeatherPlugin::tick() must stay non-blocking).
+// the shared Application loop (TempestPlugin::tick() must stay non-blocking).
 class WeatherFlowClient {
  public:
   WeatherFlowClient() = default;

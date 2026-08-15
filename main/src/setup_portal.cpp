@@ -669,7 +669,12 @@ esp_err_t SetupPortal::start(const std::array<Plugin*, kMaxPlugins>& plugins) {
   config.server_port = 80;
   config.stack_size = 12288;  // 8192 was too small — handle_root builds ~40KB HTML on the stack
   // Leave some headroom for portal endpoints so feature additions do not silently exhaust slots.
-  config.max_uri_handlers = 40;
+  // 16 core + 17 printer + 3 tempest + 3 stocks + 3 geoweather = 42 today;
+  // adding the geoweather plugin's 3 routes pushed this past the old value
+  // of 40, which failed silently at boot (httpd_register_uri_handler logs a
+  // warning, not an error -- the route just never gets registered, so its
+  // portal card would 404 with no obvious crash to point at it).
+  config.max_uri_handlers = 56;
   config.recv_wait_timeout = 30;
 
   ESP_RETURN_ON_ERROR(httpd_start(&server_, &config), kTag, "httpd_start failed");
@@ -1131,21 +1136,28 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     add_badge(&html, "printer-badge", "Bambu Printer", printer_group_badge_value, printer_group_badge_class);
   }
 #endif
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
   if (show_connection_steps) {
-    // Static placeholder — weather status is fetched and rendered client-side
-    // (see loadWeatherStatus() in the script below), not server-rendered like
+    // Static placeholder — Tempest status is fetched and rendered client-side
+    // (see loadTempestStatus() in the script below), not server-rendered like
     // printer's badge, since SetupPortal deliberately has no direct reference
-    // to WeatherPlugin (plugin-isolation principle: each plugin's portal
+    // to TempestPlugin (plugin-isolation principle: each plugin's portal
     // routes own their own data, no cross-plugin coupling in SetupPortal).
-    add_badge(&html, "weather-badge", "Weather", "Setup", "idle");
+    add_badge(&html, "tempest-badge", "Tempest", "Setup", "idle");
   }
 #endif
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   if (show_connection_steps) {
-    // Same static-placeholder-filled-client-side pattern as weather's badge
+    // Same static-placeholder-filled-client-side pattern as tempest's badge
     // above, same plugin-isolation rationale.
     add_badge(&html, "stocks-badge", "Stocks", "Setup", "idle");
+  }
+#endif
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  if (show_connection_steps) {
+    // Same static-placeholder-filled-client-side pattern as tempest/stocks
+    // badges above, same plugin-isolation rationale.
+    add_badge(&html, "geoweather-badge", "Weather", "Setup", "idle");
   }
 #endif
   html += "</div>";
@@ -1868,29 +1880,29 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
   }
 #endif  // CONFIG_INFOHUB_PLUGIN_PRINTER
 
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  // --- Weather plugin section ---
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+  // --- Tempest plugin section ---
   // Fields start empty and the badge starts as a static placeholder — filled
-  // in client-side by loadWeatherStatus() after the page loads, since
-  // SetupPortal has no direct reference to WeatherPlugin's data (see the
+  // in client-side by loadTempestStatus() after the page loads, since
+  // SetupPortal has no direct reference to TempestPlugin's data (see the
   // badge-strip comment above for why).
   if (wifi_configured) {
     begin_collapsible_section(
-        "Weather",
+        "Tempest",
         "WeatherFlow Tempest station via WeatherFlow's cloud API. Enter your station ID and personal API token below.",
-        "Setup", "idle", false, "weather-section-pill");
-    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"weather_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
+        "Setup", "idle", false, "tempest-section-pill");
+    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"tempest_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
     html += "<div class=\"grid-2\">";
-    html += "<div class=\"field\"><label for=\"weather_station_id\">Station ID</label><input id=\"weather_station_id\" value=\"\" autocomplete=\"off\"></div>";
-    html += "<div class=\"field\"><label for=\"weather_api_token\">API Token</label><input id=\"weather_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved token\" autocomplete=\"off\"></div>";
+    html += "<div class=\"field\"><label for=\"tempest_station_id\">Station ID</label><input id=\"tempest_station_id\" value=\"\" autocomplete=\"off\"></div>";
+    html += "<div class=\"field\"><label for=\"tempest_api_token\">API Token</label><input id=\"tempest_api_token\" type=\"password\" value=\"\" placeholder=\"Leave blank to keep saved token\" autocomplete=\"off\"></div>";
     html += "</div>";
-    html += "<div class=\"field\"><label for=\"weather_poll_s\">Poll Interval (seconds)</label><input id=\"weather_poll_s\" type=\"number\" min=\"60\" value=\"300\"></div>";
-    html += "<div class=\"field\"><label for=\"weather_units\">Temperature Units</label><select id=\"weather_units\">";
+    html += "<div class=\"field\"><label for=\"tempest_poll_s\">Poll Interval (seconds)</label><input id=\"tempest_poll_s\" type=\"number\" min=\"60\" value=\"300\"></div>";
+    html += "<div class=\"field\"><label for=\"tempest_units\">Temperature Units</label><select id=\"tempest_units\">";
     html += "<option value=\"c\">Celsius (\xC2\xB0" "C)</option>";
     html += "<option value=\"f\">Fahrenheit (\xC2\xB0" "F)</option>";
     html += "</select></div>";
-    html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"weather-detail\">Not configured</span></div>";
-    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"weather-save-button\">Save Weather Settings</button>";
+    html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"tempest-detail\">Not configured</span></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"tempest-save-button\">Save Tempest Settings</button>";
     html += "<div class=\"micro\">Saves station ID, API token and poll interval, then fetches immediately.</div></div>";
     end_collapsible_section();
   }
@@ -1898,7 +1910,7 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
 
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   // --- Stocks plugin section ---
-  // Same fields-start-empty / badge-filled-client-side pattern as weather's
+  // Same fields-start-empty / badge-filled-client-side pattern as tempest's
   // section above, same rationale (SetupPortal has no direct reference to
   // StocksPlugin's data).
   if (wifi_configured) {
@@ -1917,6 +1929,34 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
     html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"stocks-detail\">Not configured</span></div>";
     html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"stocks-save-button\">Save Stocks Settings</button>";
     html += "<div class=\"micro\">Saves symbols and API key, then fetches immediately. Later refreshes follow the fixed weekday schedule above.</div></div>";
+    end_collapsible_section();
+  }
+#endif
+
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  // --- GeoWeather plugin section ---
+  // Same fields-start-empty / badge-filled-client-side pattern as tempest's
+  // section above, same rationale (SetupPortal has no direct reference to
+  // GeoWeatherPlugin's data). No secret field here (Open-Meteo needs no API
+  // key), so unlike tempest/stocks there's no "leave blank to keep" hint.
+  if (wifi_configured) {
+    begin_collapsible_section(
+        "Weather",
+        "Current conditions and hourly forecast for any city, via Open-Meteo's free geocoding + forecast API. No API key needed -- just type a location.",
+        "Setup", "idle", false, "geoweather-section-pill");
+    html += "<div class=\"field\"><label><input type=\"checkbox\" id=\"geoweather_enabled\" checked style=\"width:auto;\"> Enabled</label></div>";
+    html += "<div class=\"field\"><label for=\"geoweather_location\">Location</label><input id=\"geoweather_location\" value=\"\" autocomplete=\"off\" placeholder=\"Austin, TX\"></div>";
+    html += "<div class=\"hint-box\"><strong>Resolved as:</strong> <span id=\"geoweather-resolved\">Not set</span></div>";
+    html += "<div class=\"grid-2\">";
+    html += "<div class=\"field\"><label for=\"geoweather_poll_s\">Poll Interval (seconds)</label><input id=\"geoweather_poll_s\" type=\"number\" min=\"300\" value=\"600\"></div>";
+    html += "<div class=\"field\"><label for=\"geoweather_units\">Temperature Units</label><select id=\"geoweather_units\">";
+    html += "<option value=\"c\">Celsius (\xC2\xB0" "C)</option>";
+    html += "<option value=\"f\">Fahrenheit (\xC2\xB0" "F)</option>";
+    html += "</select></div>";
+    html += "</div>";
+    html += "<div class=\"hint-box\"><strong>Status:</strong> <span id=\"geoweather-detail\">Not configured</span></div>";
+    html += "<div class=\"actions\"><button type=\"button\" class=\"secondary\" id=\"geoweather-save-button\">Save Weather Settings</button>";
+    html += "<div class=\"micro\">Saves the location and poll interval; resolution happens in the background within a few seconds.</div></div>";
     end_collapsible_section();
   }
 #endif
@@ -2589,26 +2629,26 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "input.addEventListener('input',queueArcPreview);input.addEventListener('change',commitArcColors);});";
   html += "updateDisplayRotationControls();updatePortalAccessControls();updateSourceModeControls();updateHealth();healthTimer=setInterval(updateHealth,4000);window.addEventListener('beforeunload',()=>{if(healthTimer){clearInterval(healthTimer);healthTimer=null;}stopCloudFollowup();stopLocalFollowup();});";
 
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  // --- Weather plugin JS ---
-  // Self-contained: fetches/saves through /api/plugins/weather/config only,
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+  // --- Tempest plugin JS ---
+  // Self-contained: fetches/saves through /api/plugins/tempest/config only,
   // no coupling to the printer-plugin JS above.
-  html += "let weatherStationLoaded=false;";
-  html += "async function loadWeatherStatus(){"
-          "try{const response=await fetch('/api/plugins/weather/config',{cache:'no-store'});"
+  html += "let tempestStationLoaded=false;";
+  html += "async function loadTempestStatus(){"
+          "try{const response=await fetch('/api/plugins/tempest/config',{cache:'no-store'});"
           "const body=await response.json().catch(()=>({}));"
-          "if(!weatherStationLoaded){const idInput=document.getElementById('weather_station_id');"
+          "if(!tempestStationLoaded){const idInput=document.getElementById('tempest_station_id');"
           "if(idInput)idInput.value=body.station_id||'';"
-          "const pollInput=document.getElementById('weather_poll_s');"
+          "const pollInput=document.getElementById('tempest_poll_s');"
           "if(pollInput)pollInput.value=body.poll_s||300;"
-          "const enabledInput=document.getElementById('weather_enabled');"
+          "const enabledInput=document.getElementById('tempest_enabled');"
           "if(enabledInput)enabledInput.checked=body.enabled!==false;"
-          "const unitsSelect=document.getElementById('weather_units');"
+          "const unitsSelect=document.getElementById('tempest_units');"
           "if(unitsSelect)unitsSelect.value=body.units||'c';"
-          "weatherStationLoaded=true;}"
-          "setBadge('weather-badge','Weather',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
+          "tempestStationLoaded=true;}"
+          "setBadge('tempest-badge','Tempest',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
           "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
-          "const detailEl=document.getElementById('weather-detail');"
+          "const detailEl=document.getElementById('tempest-detail');"
           "if(detailEl){if(!body.configured){detailEl.textContent='Not configured';}"
           "else if(body.last_fetch_ok&&body.has_core_reading){"
           "const isF=body.units==='f';"
@@ -2618,31 +2658,31 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "+body.barometric_pressure_mb.toFixed(1)+' mb';}"
           "else{detailEl.textContent=body.last_error||'Waiting for first fetch...';}}}"
           "catch(error){}}";
-  html += "const weatherSaveButton=document.getElementById('weather-save-button');";
-  html += "if(weatherSaveButton){weatherSaveButton.addEventListener('click',async()=>{"
-          "weatherSaveButton.disabled=true;"
-          "try{await fetch('/api/plugins/weather/config',{method:'POST',credentials:'same-origin',"
+  html += "const tempestSaveButton=document.getElementById('tempest-save-button');";
+  html += "if(tempestSaveButton){tempestSaveButton.addEventListener('click',async()=>{"
+          "tempestSaveButton.disabled=true;"
+          "try{await fetch('/api/plugins/tempest/config',{method:'POST',credentials:'same-origin',"
           "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
-          "station_id:document.getElementById('weather_station_id').value.trim(),"
-          "api_token:document.getElementById('weather_api_token').value,"
-          "poll_s:document.getElementById('weather_poll_s').value,"
-          "units:document.getElementById('weather_units').value})});"
-          "document.getElementById('weather_api_token').value='';"
-          "await loadWeatherStatus();}"
-          "catch(error){}finally{weatherSaveButton.disabled=false;}});}";
-  html += "loadWeatherStatus();setInterval(loadWeatherStatus,5000);";
-  html += "const weatherEnabledInput=document.getElementById('weather_enabled');";
-  html += "if(weatherEnabledInput){weatherEnabledInput.addEventListener('change',async()=>{"
-          "weatherEnabledInput.disabled=true;"
-          "try{await fetch('/api/plugins/weather/enabled',{method:'POST',credentials:'same-origin',"
-          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:weatherEnabledInput.checked})});}"
-          "catch(error){}finally{weatherEnabledInput.disabled=false;}});}";
+          "station_id:document.getElementById('tempest_station_id').value.trim(),"
+          "api_token:document.getElementById('tempest_api_token').value,"
+          "poll_s:document.getElementById('tempest_poll_s').value,"
+          "units:document.getElementById('tempest_units').value})});"
+          "document.getElementById('tempest_api_token').value='';"
+          "await loadTempestStatus();}"
+          "catch(error){}finally{tempestSaveButton.disabled=false;}});}";
+  html += "loadTempestStatus();setInterval(loadTempestStatus,5000);";
+  html += "const tempestEnabledInput=document.getElementById('tempest_enabled');";
+  html += "if(tempestEnabledInput){tempestEnabledInput.addEventListener('change',async()=>{"
+          "tempestEnabledInput.disabled=true;"
+          "try{await fetch('/api/plugins/tempest/enabled',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:tempestEnabledInput.checked})});}"
+          "catch(error){}finally{tempestEnabledInput.disabled=false;}});}";
 #endif
 
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   // --- Stocks plugin JS ---
   // Self-contained: fetches/saves through /api/plugins/stocks/config only,
-  // no coupling to any other plugin's JS -- same shape as weather's block
+  // no coupling to any other plugin's JS -- same shape as tempest's block
   // above, generalized from one symbol field to an array of 4.
   html += "let stocksLoaded=false;";
   html += "async function loadStocksStatus(){"
@@ -2683,10 +2723,62 @@ esp_err_t SetupPortal::handle_root(httpd_req_t* request) {
           "catch(error){}finally{stocksEnabledInput.disabled=false;}});}";
 #endif
 
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  // --- GeoWeather plugin JS ---
+  // Self-contained: fetches/saves through /api/plugins/geoweather/config
+  // only. No secret to clear on save (Open-Meteo needs no API key), unlike
+  // tempest/stocks' api_token fields above.
+  html += "let geoweatherLoaded=false;";
+  html += "async function loadGeoweatherStatus(){"
+          "try{const response=await fetch('/api/plugins/geoweather/config',{cache:'no-store'});"
+          "const body=await response.json().catch(()=>({}));"
+          "if(!geoweatherLoaded){const locInput=document.getElementById('geoweather_location');"
+          "if(locInput)locInput.value=body.location||'';"
+          "const pollInput=document.getElementById('geoweather_poll_s');"
+          "if(pollInput)pollInput.value=body.poll_s||600;"
+          "const enabledInput=document.getElementById('geoweather_enabled');"
+          "if(enabledInput)enabledInput.checked=body.enabled!==false;"
+          "const unitsSelect=document.getElementById('geoweather_units');"
+          "if(unitsSelect)unitsSelect.value=body.units||'c';"
+          "geoweatherLoaded=true;}"
+          "const resolvedEl=document.getElementById('geoweather-resolved');"
+          "if(resolvedEl){resolvedEl.textContent=body.location_resolved?(body.resolved_name||'Resolved'):(body.configured?'Not found / not yet resolved':'Not set');}"
+          "setBadge('geoweather-badge','Weather',body.configured?(body.last_fetch_ok?'Connected':'Error'):'Setup',"
+          "body.configured?(body.last_fetch_ok?'ok':'warn'):'idle');"
+          "const detailEl=document.getElementById('geoweather-detail');"
+          "if(detailEl){if(!body.configured){detailEl.textContent='Not configured';}"
+          "else if(!body.location_resolved){detailEl.textContent=body.last_error||'Resolving location...';}"
+          "else if(body.last_fetch_ok&&body.has_current){"
+          "const isF=body.units==='f';"
+          "const temp=isF?(body.current_temperature_c*9/5+32):body.current_temperature_c;"
+          "detailEl.textContent=''"
+          "+temp.toFixed(1)+'\\u00b0'+(isF?'F':'C')+', '+body.current_humidity_pct.toFixed(0)+'% RH, '"
+          "+body.current_pressure_hpa.toFixed(1)+' hPa';}"
+          "else{detailEl.textContent=body.last_error||'Waiting for first fetch...';}}}"
+          "catch(error){}}";
+  html += "const geoweatherSaveButton=document.getElementById('geoweather-save-button');";
+  html += "if(geoweatherSaveButton){geoweatherSaveButton.addEventListener('click',async()=>{"
+          "geoweatherSaveButton.disabled=true;"
+          "try{await fetch('/api/plugins/geoweather/config',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({"
+          "location:document.getElementById('geoweather_location').value.trim(),"
+          "poll_s:document.getElementById('geoweather_poll_s').value,"
+          "units:document.getElementById('geoweather_units').value})});"
+          "await loadGeoweatherStatus();}"
+          "catch(error){}finally{geoweatherSaveButton.disabled=false;}});}";
+  html += "loadGeoweatherStatus();setInterval(loadGeoweatherStatus,5000);";
+  html += "const geoweatherEnabledInput=document.getElementById('geoweather_enabled');";
+  html += "if(geoweatherEnabledInput){geoweatherEnabledInput.addEventListener('change',async()=>{"
+          "geoweatherEnabledInput.disabled=true;"
+          "try{await fetch('/api/plugins/geoweather/enabled',{method:'POST',credentials:'same-origin',"
+          "headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:geoweatherEnabledInput.checked})});}"
+          "catch(error){}finally{geoweatherEnabledInput.disabled=false;}});}";
+#endif
+
 #if CONFIG_INFOHUB_PLUGIN_PRINTER
   // --- Printer enabled toggle JS ---
   // Same "sync once, then let the user's own toggle win" pattern as
-  // weather's station_id/poll_s fields — reused here so the periodic status
+  // tempest's station_id/poll_s fields — reused here so the periodic status
   // poll doesn't stomp an in-flight click.
   html += "let printerEnabledLoaded=false;";
   html += "async function loadPrinterEnabled(){"

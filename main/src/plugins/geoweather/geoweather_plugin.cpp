@@ -1,4 +1,4 @@
-#include "infohub/plugins/weather/weather_plugin.hpp"
+#include "infohub/plugins/geoweather/geoweather_plugin.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -17,10 +17,6 @@
 #error "Unknown InfoHub hardware variant"
 #endif
 
-// Same fonts ui.cpp uses for its own pages (include/font/dosis_*.c) — plain C
-// objects, declared the same way ui.cpp does: extern "C", at file scope (not
-// inside namespace infohub, which would give them C++ mangled names that
-// don't match the real symbols).
 extern "C" {
 extern const lv_font_t dosis_20;
 extern const lv_font_t dosis_32;
@@ -31,49 +27,94 @@ extern const lv_font_t dosis_64;
 namespace infohub {
 
 namespace {
-constexpr char kTag[] = "infohub.weather";
-constexpr char kPluginNs[] = "weather";
+constexpr char kTag[] = "infohub.geoweather";
+constexpr char kPluginNs[] = "geoweather";
 constexpr int kConditionArcDiameter = board::kDisplayWidth - 60;
 constexpr int kConditionArcWidth = 18;
 constexpr uint32_t kConditionArcNeutralHex = 0x444444;
 
-// WeatherFlow's `icon` field on both current_conditions and each hourly
-// forecast entry is a small fixed enum (DarkSky-derived, confirmed against
-// WeatherFlow's REST API docs) -- unlike the free-text `conditions` string
-// ("Partly Cloudy", "Rain Likely", ...), it's stable enough to map to a
-// color category. Substring match (not exact), so e.g.
-// "possibly-thunderstorm-night" still hits "thunderstorm".
-uint32_t condition_color_for_icon(const std::string& icon) {
-  if (icon.find("thunderstorm") != std::string::npos) {
-    return 0x8E44AD;  // storm -- deep purple
+// WMO weather interpretation codes (Open-Meteo's `weather_code` field,
+// 0-99) -- a completely different vocabulary from WeatherFlow's icon
+// strings, so this can't reuse TempestPlugin's condition_color_for_icon().
+// No "windy" category -- WMO codes have no wind-specific value.
+uint32_t condition_color_for_wmo_code(int code) {
+  if (code == 0) {
+    return 0xFFC940;  // clear -- gold
   }
-  if (icon.find("snow") != std::string::npos || icon.find("sleet") != std::string::npos) {
-    return 0x7FD8F5;  // snow/sleet -- icy cyan
+  if (code == 1 || code == 2) {
+    return 0xB0BEC5;  // mostly clear / partly cloudy -- light grey-blue
   }
-  if (icon.find("rain") != std::string::npos) {
-    return 0x3B82F6;  // rain -- blue
-  }
-  if (icon.find("foggy") != std::string::npos) {
-    return 0x9AA5B1;  // fog -- muted grey
-  }
-  if (icon.find("windy") != std::string::npos) {
-    return 0x2FBF9F;  // windy -- teal
-  }
-  if (icon.find("partly-cloudy") != std::string::npos) {
-    return 0xB0BEC5;  // partly cloudy -- light grey-blue
-  }
-  if (icon.find("cloudy") != std::string::npos) {
+  if (code == 3) {
     return 0x78909C;  // overcast -- darker grey-blue
   }
-  if (icon.find("clear") != std::string::npos) {
-    return 0xFFC940;  // clear/sunny -- gold
+  if (code == 45 || code == 48) {
+    return 0x9AA5B1;  // fog -- muted grey
   }
-  return kConditionArcNeutralHex;  // unrecognized icon -- neutral, not a guess
+  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+    return 0x3B82F6;  // drizzle/rain (incl. freezing) and rain showers -- blue
+  }
+  if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+    return 0x7FD8F5;  // snow/snow showers -- icy cyan
+  }
+  if (code >= 95 && code <= 99) {
+    return 0x8E44AD;  // thunderstorm (incl. hail) -- deep purple
+  }
+  return kConditionArcNeutralHex;  // unrecognized/absent -- neutral, not a guess
 }
 
-// "3pm", "11am" — respects TZ since time_sync.cpp calls tzset() via
-// set_timezone_iana() at boot (see main/src/time_sync.cpp). Same
-// localtime_r-based pattern as ui.cpp's eta_text().
+// Open-Meteo gives no free-text condition string like WeatherFlow does --
+// the plugin renders its own short label from the numeric code.
+const char* wmo_code_text(int code) {
+  switch (code) {
+    case 0:
+      return "Clear";
+    case 1:
+      return "Mostly Clear";
+    case 2:
+      return "Partly Cloudy";
+    case 3:
+      return "Overcast";
+    case 45:
+    case 48:
+      return "Fog";
+    case 51:
+    case 53:
+    case 55:
+      return "Drizzle";
+    case 56:
+    case 57:
+      return "Freezing Drizzle";
+    case 61:
+    case 63:
+    case 65:
+      return "Rain";
+    case 66:
+    case 67:
+      return "Freezing Rain";
+    case 71:
+    case 73:
+    case 75:
+    case 77:
+      return "Snow";
+    case 80:
+    case 81:
+    case 82:
+      return "Rain Showers";
+    case 85:
+    case 86:
+      return "Snow Showers";
+    case 95:
+      return "Thunderstorm";
+    case 96:
+    case 99:
+      return "Thunderstorm w/ Hail";
+    default:
+      return "Unknown";
+  }
+}
+
+// "3pm", "11am" — same localtime_r-based pattern as TempestPlugin's own copy
+// (not worth a shared header for 2 call sites).
 std::string hour_label_text(uint64_t time_unix) {
   const std::time_t t = static_cast<std::time_t>(time_unix);
   std::tm local{};
@@ -89,15 +130,15 @@ std::string hour_label_text(uint64_t time_unix) {
   return buffer;
 }
 
-// WeatherFlowClient always stores Celsius internally (see fahrenheit_'s
-// declaration comment) -- this is the one place the display conversion
-// happens, applied wherever a temperature gets rendered.
+// GeoWeatherClient always stores Celsius internally -- this is the one place
+// the display conversion happens, applied wherever a temperature gets
+// rendered.
 double celsius_to_display(double celsius_value, bool fahrenheit) {
   return fahrenheit ? (celsius_value * 9.0 / 5.0 + 32.0) : celsius_value;
 }
 }  // namespace
 
-esp_err_t WeatherPlugin::init(PluginContext& ctx) {
+esp_err_t GeoWeatherPlugin::init(PluginContext& ctx) {
   config_store_ = &ctx.config_store;
   wifi_manager_ = &ctx.wifi_manager;
   setup_portal_ = &ctx.setup_portal;
@@ -109,55 +150,50 @@ esp_err_t WeatherPlugin::init(PluginContext& ctx) {
 
   const esp_err_t err = client_.start();
   if (err != ESP_OK) {
-    ESP_LOGE(kTag, "WeatherFlowClient task start failed: %s", esp_err_to_name(err));
+    ESP_LOGE(kTag, "GeoWeatherClient task start failed: %s", esp_err_to_name(err));
   }
   return err;
 }
 
-void WeatherPlugin::load_config() {
+void GeoWeatherPlugin::load_config() {
   if (config_store_ == nullptr) {
     return;
   }
-  const std::string station_id = config_store_->load_plugin_string(kPluginNs, "station_id");
-  const std::string api_token = config_store_->load_plugin_string(kPluginNs, "api_token");
+  const std::string location = config_store_->load_plugin_string(kPluginNs, "location");
   const std::string poll_s_str = config_store_->load_plugin_string(kPluginNs, "poll_s");
-  uint32_t poll_interval_s = 300;
+  uint32_t poll_interval_s = 600;
   if (!poll_s_str.empty()) {
     poll_interval_s = static_cast<uint32_t>(std::strtoul(poll_s_str.c_str(), nullptr, 10));
   }
-  client_.configure(station_id, api_token, poll_interval_s);
+  client_.configure(location, poll_interval_s);
 
   set_fahrenheit(config_store_->load_plugin_string(kPluginNs, "units") == "f");
   set_enabled(config_store_->load_plugin_string(kPluginNs, "enabled") != "0");
 }
 
-void WeatherPlugin::tick(uint64_t) {
-  // No per-tick work — polling happens entirely on WeatherFlowClient's own
+void GeoWeatherPlugin::tick(uint64_t) {
+  // No per-tick work — polling happens entirely on GeoWeatherClient's own
   // task; update_ui() (called every Application loop iteration regardless of
   // this) is where the fetched snapshot gets pushed to the screen.
 }
 
-bool WeatherPlugin::wants_network() const {
+bool GeoWeatherPlugin::wants_network() const {
   return client_.snapshot().configured;
 }
 
-void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
+void GeoWeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   if (parent == nullptr) {
     return;
   }
 
-  LvglLockGuard lock(3000, "WeatherPlugin::build_screen");
+  LvglLockGuard lock(3000, "GeoWeatherPlugin::build_screen");
   if (!lock.locked()) {
     return;
   }
 
   if (page_index == 1) {
-    // Row of kHourlyForecastCount fixed cards (no scroll -- with only 4
-    // entries they all fit, so a static row fills the round page evenly
-    // instead of leaving a half-scrolled strip). Each card is a rounded
-    // tile tinted by that hour's condition color (set in update_ui(), since
-    // entry.icon isn't known yet here) so the row reads as a color-coded
-    // strip at a glance, not just a wall of text.
+    // Same fixed-4-card-row layout as TempestPlugin's page 1 -- see that
+    // file's build_screen() for the design rationale.
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, board::kDisplayWidth - 24, 300);
     lv_obj_center(row);
@@ -168,7 +204,7 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, 10, 0);
 
-    for (uint8_t i = 0; i < kHourlyForecastCount; ++i) {
+    for (uint8_t i = 0; i < kGeoHourlyForecastCount; ++i) {
       ForecastColumn& fc = forecast_columns_[i];
 
       fc.card = lv_obj_create(row);
@@ -207,9 +243,6 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   }
 
   if (page_index == 0) {
-    // Created before `column` below so it draws behind the text -- a full
-    // ring (bg_angles 0-360, value pinned to the range max) recolored per
-    // current_conditions.icon in update_ui(), not a progress metric.
     condition_arc_ = lv_arc_create(parent);
     lv_obj_set_size(condition_arc_, kConditionArcDiameter, kConditionArcDiameter);
     lv_obj_center(condition_arc_);
@@ -260,68 +293,69 @@ void WeatherPlugin::build_screen(lv_obj_t* parent, uint8_t page_index) {
   lv_obj_set_style_text_color(status_label_, lv_color_hex(0x999999), 0);
 }
 
-void WeatherPlugin::update_ui() {
+void GeoWeatherPlugin::update_ui() {
   if (ui_ == nullptr || temp_label_ == nullptr) {
     return;
   }
 
-  const WeatherFlowSnapshot snapshot = client_.snapshot();
+  const GeoWeatherSnapshot snapshot = client_.snapshot();
   ui_->set_plugin_pages_enabled(id(), snapshot.configured);
   if (!snapshot.configured) {
     return;
   }
 
-  LvglLockGuard lock(200, "WeatherPlugin::update_ui");
+  LvglLockGuard lock(200, "GeoWeatherPlugin::update_ui");
   if (!lock.locked()) {
     return;
   }
 
   const bool fahrenheit = fahrenheit_.load();
 
-  if (snapshot.has_core_reading) {
+  if (snapshot.has_current) {
     char temp_buf[16];
     std::snprintf(temp_buf, sizeof(temp_buf), "%.1f\xC2\xB0%s",
-                  celsius_to_display(snapshot.air_temperature_c, fahrenheit),
+                  celsius_to_display(snapshot.current_temperature_c, fahrenheit),
                   fahrenheit ? "F" : "C");
     lv_label_set_text(temp_label_, temp_buf);
 
     char detail_buf[64];
-    std::snprintf(detail_buf, sizeof(detail_buf), "%.0f%% RH  \xC2\xB7  %.1f mb",
-                  snapshot.relative_humidity_pct, snapshot.barometric_pressure_mb);
+    std::snprintf(detail_buf, sizeof(detail_buf), "%.0f%% RH  \xC2\xB7  %.1f hPa",
+                  snapshot.current_humidity_pct, snapshot.current_pressure_hpa);
     lv_label_set_text(detail_label_, detail_buf);
-
-    lv_label_set_text(status_label_, snapshot.last_fetch_ok ? "" : "Last update failed - showing stale data");
   } else {
     lv_label_set_text(temp_label_, "--");
     lv_label_set_text(detail_label_, "");
+  }
+
+  // Three-way status: not-resolved (show error/"resolving"), resolved but no
+  // fetch yet, or a failed fetch -- unlike TempestPlugin's two-way status,
+  // since geocoding is an extra async step this plugin has that tempest
+  // doesn't.
+  if (!snapshot.location_resolved) {
     lv_label_set_text(status_label_,
-                      snapshot.last_error.empty() ? "Waiting for first fetch..."
-                                                   : snapshot.last_error.c_str());
+                      snapshot.last_error.empty() ? "Resolving location..." : snapshot.last_error.c_str());
+  } else if (!snapshot.has_current) {
+    lv_label_set_text(status_label_, "Waiting for first fetch...");
+  } else if (!snapshot.last_fetch_ok) {
+    lv_label_set_text(status_label_, "Last update failed - showing stale data");
+  } else {
+    lv_label_set_text(status_label_, "");
   }
 
   if (condition_arc_ != nullptr) {
-    // Prefer better_forecast's current_conditions; fall back to the nearest
-    // hourly entry (same request, just a different part of the payload) if
-    // current_conditions wasn't present in the response.
-    std::string icon;
-    std::string condition_text;
-    if (snapshot.has_current_conditions) {
-      icon = snapshot.current_icon;
-      condition_text = snapshot.current_conditions_text;
-    } else if (snapshot.has_forecast && snapshot.hourly_forecast[0].has_data) {
-      icon = snapshot.hourly_forecast[0].icon;
-      condition_text = snapshot.hourly_forecast[0].conditions;
-    }
-    const uint32_t arc_color = icon.empty() ? kConditionArcNeutralHex : condition_color_for_icon(icon);
+    const uint32_t arc_color = snapshot.has_current
+                                    ? condition_color_for_wmo_code(snapshot.current_weather_code)
+                                    : kConditionArcNeutralHex;
     lv_obj_set_style_arc_color(condition_arc_, lv_color_hex(arc_color), LV_PART_INDICATOR);
     if (condition_text_label_ != nullptr) {
-      lv_label_set_text(condition_text_label_, condition_text.c_str());
+      lv_label_set_text(condition_text_label_,
+                        snapshot.has_current ? wmo_code_text(snapshot.current_weather_code) : "");
     }
   }
 
   if (snapshot.has_forecast) {
-    for (uint8_t i = 0; i < kHourlyForecastCount; ++i) {
-      const HourlyForecastEntry& entry = snapshot.hourly_forecast[i];
+    for (uint8_t i = 0; i < kGeoHourlyForecastCount; ++i) {
+      const GeoHourlyForecastEntry& entry = snapshot.hourly_forecast[i];
       const ForecastColumn& fc = forecast_columns_[i];
       if (fc.time_label == nullptr) {
         continue;
@@ -338,9 +372,10 @@ void WeatherPlugin::update_ui() {
       lv_label_set_text(fc.time_label, hour_label_text(entry.time_unix).c_str());
       char temp_buf[16];
       std::snprintf(temp_buf, sizeof(temp_buf), "%.0f\xC2\xB0",
-                    celsius_to_display(entry.air_temperature_c, fahrenheit));
+                    celsius_to_display(entry.temperature_c, fahrenheit));
       lv_label_set_text(fc.temp_label, temp_buf);
-      std::string conditions_text = entry.conditions;
+
+      std::string conditions_text = wmo_code_text(entry.weather_code);
       if (entry.precip_probability > 0.0) {
         char precip_buf[24];
         std::snprintf(precip_buf, sizeof(precip_buf), "\n%.0f%%", entry.precip_probability);
@@ -348,8 +383,7 @@ void WeatherPlugin::update_ui() {
       }
       lv_label_set_text(fc.conditions_label, conditions_text.c_str());
 
-      const uint32_t card_color =
-          entry.icon.empty() ? kConditionArcNeutralHex : condition_color_for_icon(entry.icon);
+      const uint32_t card_color = condition_color_for_wmo_code(entry.weather_code);
       if (fc.card != nullptr) {
         lv_obj_set_style_bg_color(fc.card, lv_color_hex(card_color), 0);
       }

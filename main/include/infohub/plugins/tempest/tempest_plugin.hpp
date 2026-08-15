@@ -4,24 +4,24 @@
 #include <atomic>
 
 #include "infohub/plugin.hpp"
-#include "infohub/plugins/weather/weather_flow_client.hpp"
+#include "infohub/plugins/tempest/weather_flow_client.hpp"
 
 namespace infohub {
 
 class Ui;
 
-// First real second Plugin implementation (weather, via WeatherFlow's cloud
+// First real second Plugin implementation (Tempest, via WeatherFlow's cloud
 // REST API for a Tempest station) — see CLAUDE.md's "Phased extraction
 // sequencing plan" Phase 9/10. build_screen() renders into a page reserved
 // from Ui's generic plugin-page pool (Ui::plugin_page_container()) via
 // page_count()/register_plugin_pages() — the same mechanism any other
-// non-printer plugin (e.g. a future stocks plugin) uses.
-class WeatherPlugin : public Plugin {
+// non-printer plugin (e.g. stocks, geoweather) uses.
+class TempestPlugin : public Plugin {
  public:
-  WeatherPlugin() = default;
+  TempestPlugin() = default;
 
-  const char* id() const override { return "weather"; }
-  const char* display_name() const override { return "Weather"; }
+  const char* id() const override { return "tempest"; }
+  const char* display_name() const override { return "Tempest"; }
 
   esp_err_t init(PluginContext& ctx) override;
   void tick(uint64_t now_ms) override;
@@ -76,7 +76,7 @@ class WeatherPlugin : public Plugin {
   // Page 0 widgets, built once in build_screen(), updated in update_ui().
   // condition_arc_ is a full-circle ring (built first, so it draws behind
   // the text column) colored per current_conditions.icon -- see
-  // condition_color_for_icon() in weather_plugin.cpp.
+  // condition_color_for_icon() in tempest_plugin.cpp.
   lv_obj_t* condition_arc_ = nullptr;
   lv_obj_t* temp_label_ = nullptr;
   lv_obj_t* condition_text_label_ = nullptr;

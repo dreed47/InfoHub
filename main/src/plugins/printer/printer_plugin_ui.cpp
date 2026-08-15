@@ -1857,7 +1857,7 @@ void PrinterPlugin::apply_snapshot_locked(const PrinterSnapshot& snapshot, bool 
 void PrinterPlugin::update_ui() {
   // Application only calls update_ui() for enabled plugins, so reaching here
   // means this plugin is enabled — ensure its page range is visible (cheap
-  // no-op once already so, mirrors WeatherPlugin's own update_ui() pattern).
+  // no-op once already so, mirrors TempestPlugin's own update_ui() pattern).
   // The disable transition itself is handled by apply_enabled_state_to_ui(),
   // called from the portal's enabled-toggle handler.
   ui_->set_plugin_pages_enabled(id(), true, 200);

@@ -12,16 +12,19 @@ menu "InfoHub"
             all printer-specific code, TLS trust anchors, and MQTT/JPEG
             dependencies are compiled out entirely.
 
-    config INFOHUB_PLUGIN_WEATHER
-        bool "Enable weather plugin (WeatherFlow Tempest cloud API)"
+    config INFOHUB_PLUGIN_TEMPEST
+        bool "Enable Tempest plugin (WeatherFlow Tempest cloud API)"
         default n
         help
-            Enables the weather plugin: fetches current conditions from a
-            WeatherFlow Tempest station via WeatherFlow's cloud REST API
-            (station ID + personal API token, entered in Web Config). Adds a
-            "Weather" card to Web Config. No on-device display screen yet
-            (Web Config only). Disabled by default to keep flash/RAM budget
-            down on builds that don't want it.
+            Enables the Tempest plugin: fetches current conditions and an
+            hourly forecast from a WeatherFlow Tempest weather station via
+            WeatherFlow's cloud REST API (station ID + personal API token,
+            entered in Web Config). Adds a "Tempest" card to Web Config plus
+            a 2-page on-device display screen (current conditions + hourly
+            forecast). For owners of an actual WeatherFlow Tempest station
+            specifically — see INFOHUB_PLUGIN_GEOWEATHER for a generic,
+            no-hardware-required weather plugin. Disabled by default to keep
+            flash/RAM budget down on builds that don't want it.
 
     config INFOHUB_PLUGIN_STOCKS
         bool "Enable stocks plugin (Alpha Vantage cloud API)"
@@ -36,6 +39,21 @@ menu "InfoHub"
             infrequently (hours, not minutes) and free-tier data itself only
             refreshes once per trading day. Disabled by default to keep
             flash/RAM budget down on builds that don't want it.
+
+    config INFOHUB_PLUGIN_GEOWEATHER
+        bool "Enable geoweather plugin (Open-Meteo city/location weather, no API key)"
+        default n
+        help
+            Enables the geoweather plugin: fetches current conditions and an
+            hourly forecast for a free-text location (e.g. "Austin, TX") via
+            Open-Meteo's free geocoding + forecast REST APIs -- no API key or
+            account required. Adds a "Weather" card to Web Config and a
+            2-page on-device display screen (current conditions + hourly
+            forecast). This is the general-purpose weather plugin most users
+            want; the separate Tempest plugin (INFOHUB_PLUGIN_TEMPEST) is for
+            owners of an actual WeatherFlow Tempest station specifically.
+            Disabled by default to keep flash/RAM budget down on builds that
+            don't want it.
 
     config INFOHUB_EXPERIMENTAL_PRINT_CONTROL
         bool "Enable experimental print control buttons (Pause/Resume/Stop)"

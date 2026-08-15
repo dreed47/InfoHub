@@ -86,11 +86,14 @@ Application::Application()
   });
   plugins_[0] = &printer_plugin_;
 #endif
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  plugins_[1] = &weather_plugin_;
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+  plugins_[1] = &tempest_plugin_;
 #endif
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   plugins_[2] = &stocks_plugin_;
+#endif
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  plugins_[3] = &geoweather_plugin_;
 #endif
 }
 
@@ -216,7 +219,7 @@ void Application::run() {
     }
 
     // Portal PIN/hint push is core, independent of any plugin's enabled
-    // state — a device running weather-only (printer disabled) still needs
+    // state — a device running tempest-only (printer disabled) still needs
     // the PIN overlay to work. See Ui::update_portal_access_visuals().
     const PortalAccessSnapshot portal_access = setup_portal_.access_snapshot();
     ui_.set_portal_access_state(portal_access.lock_enabled, portal_access.request_authorized,

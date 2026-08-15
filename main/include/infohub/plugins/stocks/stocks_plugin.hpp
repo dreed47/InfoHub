@@ -10,7 +10,7 @@ namespace infohub {
 class Ui;
 
 // Third Plugin implementation (stocks, via Alpha Vantage's GLOBAL_QUOTE REST
-// API), built directly on WeatherPlugin's established shape: own client on
+// API), built directly on TempestPlugin's established shape: own client on
 // its own FreeRTOS task, ConfigStore per-plugin namespace, portal routes
 // split into .../config + .../enabled, one page from the generic plugin-page
 // pool (page_count()/build_screen(parent, page_index)).
@@ -39,7 +39,7 @@ class StocksPlugin : public Plugin {
 
   // Has an API key + at least one symbol saved and a successful (or
   // at-least-tried) fetch -- same "configured" flag update_ui() already
-  // gates its own page visibility on, mirrors WeatherPlugin::is_configured().
+  // gates its own page visibility on, mirrors TempestPlugin::is_configured().
   bool is_configured() const override { return client_.snapshot().configured; }
 
   StockClient& client() { return client_; }

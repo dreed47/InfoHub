@@ -533,6 +533,23 @@ void Ui::register_page0_reentry_callback(Page0ReentryCallback callback, void* us
 void Ui::apply_page0_parallax(bool force) {
   if (page0_fade_title_ == nullptr || page0_fade_card_list_ == nullptr ||
       ui_shell_.pager() == nullptr) {
+    // No printer page0 -- either the printer plugin is compiled out
+    // entirely, or build_dashboard() hasn't reached page0 construction yet.
+    // There's nothing to parallax-fade, but the lv_layer_top() overlay
+    // (arc/progress label) has no other mechanism keeping it hidden -- it
+    // defaults to fully opaque at creation (see build_dashboard()) and
+    // every other path to hiding it runs through the code below, which we
+    // can't reach without page0. Without this, a printer-disabled build
+    // shows a permanently stuck "--%" at the top of every screen. Battery
+    // labels aren't touched here -- they have their own independent
+    // hidden-flag gate (set_battery_overlay_visible()) that already works
+    // regardless of this function.
+    if (fixed_overlay_ != nullptr) {
+      set_hidden(fixed_overlay_, true);
+    }
+    if (progress_label_ != nullptr) {
+      lv_obj_set_style_opa(progress_label_, LV_OPA_TRANSP, 0);
+    }
     return;
   }
 
@@ -964,6 +981,15 @@ esp_err_t Ui::build_dashboard() {
   publish_page_state_snapshot();
   apply_page_visibility();
   update_portal_access_visuals_locked();
+
+  // Establish the initial no-plugins-overlay state right away. Every other
+  // call site is set_plugin_pages_enabled()'s resettle path, which only
+  // fires on a *change* — but plugin_pages_enabled_[] already defaults to
+  // false for every page (see the loop above), so a plugin that starts (and
+  // stays) unconfigured never causes a false->false "change" and this would
+  // otherwise never run at all, leaving a genuinely blank screen instead of
+  // the "No plugins enabled" message when nothing is configured yet.
+  update_no_plugins_overlay_locked();
 
   return ESP_OK;
 }

@@ -489,7 +489,7 @@ esp_err_t PrinterPlugin::init(PluginContext& ctx) {
   // and Application only calls update_ui() for enabled plugins — so a
   // disabled-at-boot printer simply never gets its pages shown, and an
   // enabled one shows them via its own first update_ui() tick (mirrors
-  // WeatherPlugin's existing pattern).
+  // TempestPlugin's existing pattern).
 
   // Restore per-event enable flags and any custom PCM blobs for this
   // plugin's 8 built-in AudioNotifier events. Moved here from

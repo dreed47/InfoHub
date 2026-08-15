@@ -1,5 +1,5 @@
 // Portal routes for StocksPlugin, split from stocks_plugin.cpp the same way
-// weather_plugin_portal.cpp splits off WeatherPlugin's routes.
+// tempest_plugin_portal.cpp splits off TempestPlugin's routes.
 
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
 
@@ -14,7 +14,7 @@ namespace infohub {
 namespace {
 constexpr char kPluginNs[] = "stocks";
 
-// Same empty-submission-reuses-stored-value convention as WeatherPlugin's
+// Same empty-submission-reuses-stored-value convention as TempestPlugin's
 // merge_secret -- the settings card never echoes the saved key back, so a
 // blank field on submit means "keep the current one".
 std::string merge_secret(const std::string& submitted, const std::string& stored) {
@@ -125,7 +125,7 @@ esp_err_t StocksPlugin::handle_config_post(httpd_req_t* request) {
 
 // Separate from handle_config_post so toggling the checkbox can apply
 // instantly without risking a partial payload wiping symbols/key -- same
-// split WeatherPlugin/PrinterPlugin use for their own enabled toggles.
+// split TempestPlugin/PrinterPlugin use for their own enabled toggles.
 esp_err_t StocksPlugin::handle_enabled_post(httpd_req_t* request) {
   auto* plugin = static_cast<StocksPlugin*>(request->user_ctx);
   if (plugin == nullptr) {
@@ -170,7 +170,7 @@ esp_err_t StocksPlugin::handle_enabled_post(httpd_req_t* request) {
     // wouldn't otherwise notice the page should stop being offered -- hide
     // it immediately. This runs on SetupPortal's HTTP task, racing the main
     // task for the LVGL lock, with no next update_ui() tick to retry a lost
-    // race on -- same fix as WeatherPlugin's/PrinterPlugin's equivalent
+    // race on -- same fix as TempestPlugin's/PrinterPlugin's equivalent
     // portal handlers (see set_plugin_pages_enabled()'s lock_timeout_ms doc).
     plugin->ui_->set_plugin_pages_enabled(plugin->id(), false, /*lock_timeout_ms=*/2000);
   }

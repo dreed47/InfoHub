@@ -15,11 +15,14 @@
 #if CONFIG_INFOHUB_PLUGIN_PRINTER
 #include "infohub/plugins/printer/printer_plugin.hpp"
 #endif
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-#include "infohub/plugins/weather/weather_plugin.hpp"
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+#include "infohub/plugins/tempest/tempest_plugin.hpp"
 #endif
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
 #include "infohub/plugins/stocks/stocks_plugin.hpp"
+#endif
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+#include "infohub/plugins/geoweather/geoweather_plugin.hpp"
 #endif
 
 namespace infohub {
@@ -40,18 +43,21 @@ class Application {
   PmuManager pmu_manager_{};
   AudioNotifier audio_notifier_{};
   // Shared handshake-serialization primitive across every plugin's network
-  // clients (TLS/MQTT/HTTPS). Core, unconditional -- a weather+stocks-only
+  // clients (TLS/MQTT/HTTPS). Core, unconditional -- a tempest+stocks-only
   // build still needs its two independent HTTP clients coordinated, not just
   // printer's three.
   NetworkArbiter network_arbiter_{};
 #if CONFIG_INFOHUB_PLUGIN_PRINTER
   PrinterPlugin printer_plugin_{};
 #endif
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  WeatherPlugin weather_plugin_{};
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+  TempestPlugin tempest_plugin_{};
 #endif
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   StocksPlugin stocks_plugin_{};
+#endif
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  GeoWeatherPlugin geoweather_plugin_{};
 #endif
   SetupPortal setup_portal_;
   SerialProvisioner serial_provisioner_;

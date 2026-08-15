@@ -1,8 +1,8 @@
-// Portal routes for WeatherPlugin, split from weather_plugin.cpp the same
+// Portal routes for TempestPlugin, split from tempest_plugin.cpp the same
 // way printer_plugin_portal.cpp splits off PrinterPlugin's routes — keeps
 // HTTP handler code separate from tick()/init() lifecycle code.
 
-#include "infohub/plugins/weather/weather_plugin.hpp"
+#include "infohub/plugins/tempest/tempest_plugin.hpp"
 
 #include <cstdlib>
 
@@ -15,7 +15,7 @@
 namespace infohub {
 
 namespace {
-constexpr char kPluginNs[] = "weather";
+constexpr char kPluginNs[] = "tempest";
 
 // Same empty-submission-reuses-stored-value convention as PrinterPlugin's
 // merge_cloud_credentials — the settings card never echoes the saved token
@@ -25,8 +25,8 @@ std::string merge_secret(const std::string& submitted, const std::string& stored
 }
 }  // namespace
 
-esp_err_t WeatherPlugin::handle_config_get(httpd_req_t* request) {
-  auto* plugin = static_cast<WeatherPlugin*>(request->user_ctx);
+esp_err_t TempestPlugin::handle_config_get(httpd_req_t* request) {
+  auto* plugin = static_cast<TempestPlugin*>(request->user_ctx);
   if (plugin == nullptr) {
     return ESP_FAIL;
   }
@@ -73,8 +73,8 @@ esp_err_t WeatherPlugin::handle_config_get(httpd_req_t* request) {
   return ESP_OK;
 }
 
-esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
-  auto* plugin = static_cast<WeatherPlugin*>(request->user_ctx);
+esp_err_t TempestPlugin::handle_config_post(httpd_req_t* request) {
+  auto* plugin = static_cast<TempestPlugin*>(request->user_ctx);
   if (plugin == nullptr) {
     return ESP_FAIL;
   }
@@ -124,8 +124,8 @@ esp_err_t WeatherPlugin::handle_config_post(httpd_req_t* request) {
 // unconditionally on every submit) so toggling the checkbox can apply
 // instantly without risking a partial payload wiping those fields — same
 // split PrinterPlugin uses for its own enabled toggle.
-esp_err_t WeatherPlugin::handle_enabled_post(httpd_req_t* request) {
-  auto* plugin = static_cast<WeatherPlugin*>(request->user_ctx);
+esp_err_t TempestPlugin::handle_enabled_post(httpd_req_t* request) {
+  auto* plugin = static_cast<TempestPlugin*>(request->user_ctx);
   if (plugin == nullptr) {
     return ESP_FAIL;
   }
@@ -158,25 +158,25 @@ esp_err_t WeatherPlugin::handle_enabled_post(httpd_req_t* request) {
   return ESP_OK;
 }
 
-void WeatherPlugin::register_portal_routes(httpd_handle_t server) {
+void TempestPlugin::register_portal_routes(httpd_handle_t server) {
   httpd_uri_t get_uri = {};
-  get_uri.uri = "/api/plugins/weather/config";
+  get_uri.uri = "/api/plugins/tempest/config";
   get_uri.method = HTTP_GET;
-  get_uri.handler = &WeatherPlugin::handle_config_get;
+  get_uri.handler = &TempestPlugin::handle_config_get;
   get_uri.user_ctx = this;
   httpd_register_uri_handler(server, &get_uri);
 
   httpd_uri_t post_uri = {};
-  post_uri.uri = "/api/plugins/weather/config";
+  post_uri.uri = "/api/plugins/tempest/config";
   post_uri.method = HTTP_POST;
-  post_uri.handler = &WeatherPlugin::handle_config_post;
+  post_uri.handler = &TempestPlugin::handle_config_post;
   post_uri.user_ctx = this;
   httpd_register_uri_handler(server, &post_uri);
 
   httpd_uri_t enabled_uri = {};
-  enabled_uri.uri = "/api/plugins/weather/enabled";
+  enabled_uri.uri = "/api/plugins/tempest/enabled";
   enabled_uri.method = HTTP_POST;
-  enabled_uri.handler = &WeatherPlugin::handle_enabled_post;
+  enabled_uri.handler = &TempestPlugin::handle_enabled_post;
   enabled_uri.user_ctx = this;
   httpd_register_uri_handler(server, &enabled_uri);
 }

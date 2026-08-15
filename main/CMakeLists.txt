@@ -39,9 +39,9 @@ if(CONFIG_INFOHUB_PLUGIN_PRINTER)
         "src/plugins/printer/status_resolver.cpp"
         # bambuicon (logo) / mdi_40 are printer-content-only as of Phase
         # 4b/4c — moved out of the unconditional font/image asset list below,
-        # into here. dosis_32 stays unconditional below: weather and stocks
-        # both use it too (confirmed via grep), a printer-disabled build
-        # fails to link without it.
+        # into here. dosis_32 stays unconditional below: tempest, stocks, and
+        # geoweather all use it too (confirmed via grep), a printer-disabled
+        # build fails to link without it.
         "include/img/bambuicon.c"
         "include/font/mdi_40.c"
     )
@@ -68,11 +68,11 @@ endif()
 # disabled, nothing calls into mqtt/jpeg, and the linker's --gc-sections
 # strips their unused code from the final image regardless.
 
-if(CONFIG_INFOHUB_PLUGIN_WEATHER)
+if(CONFIG_INFOHUB_PLUGIN_TEMPEST)
     list(APPEND INFOHUB_PLUGIN_SRCS
-        "src/plugins/weather/weather_flow_client.cpp"
-        "src/plugins/weather/weather_plugin.cpp"
-        "src/plugins/weather/weather_plugin_portal.cpp"
+        "src/plugins/tempest/weather_flow_client.cpp"
+        "src/plugins/tempest/tempest_plugin.cpp"
+        "src/plugins/tempest/tempest_plugin_portal.cpp"
     )
 endif()
 
@@ -92,6 +92,14 @@ if(CONFIG_INFOHUB_PLUGIN_STOCKS)
         # from https://pki.goog/repo/certs/gtsr4.pem (self-signed root,
         # valid to 2036), not fabricated.
         "include/infohub/plugins/stocks/gts_root_r4.cert"
+    )
+endif()
+
+if(CONFIG_INFOHUB_PLUGIN_GEOWEATHER)
+    list(APPEND INFOHUB_PLUGIN_SRCS
+        "src/plugins/geoweather/geo_weather_client.cpp"
+        "src/plugins/geoweather/geoweather_plugin.cpp"
+        "src/plugins/geoweather/geoweather_plugin_portal.cpp"
     )
 endif()
 

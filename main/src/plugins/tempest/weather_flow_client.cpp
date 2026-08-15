@@ -1,4 +1,4 @@
-#include "infohub/plugins/weather/weather_flow_client.hpp"
+#include "infohub/plugins/tempest/weather_flow_client.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -14,7 +14,7 @@
 namespace infohub {
 
 namespace {
-constexpr char kTag[] = "infohub.weather";
+constexpr char kTag[] = "infohub.tempest.wf";
 constexpr size_t kMaxObservationJsonBytes = 16U * 1024U;
 // better_forecast returns many more fields/entries (forecast.hourly[] alone
 // is typically ~24-200+ hours, plus forecast.daily[] and a full current-
@@ -392,13 +392,13 @@ bool WeatherFlowClient::perform_json_request(const std::string& url, int* status
   // synchronous acquire/release around just this one call is correct (no
   // async event-handler bookkeeping needed, unlike an MQTT client's
   // esp_mqtt_client_start()).
-  if (network_arbiter_ != nullptr && !network_arbiter_->try_acquire_handshake_slot("weather.http")) {
+  if (network_arbiter_ != nullptr && !network_arbiter_->try_acquire_handshake_slot("tempest.http")) {
     esp_http_client_cleanup(client);
     return false;
   }
   const esp_err_t open_err = esp_http_client_open(client, 0);
   if (network_arbiter_ != nullptr) {
-    network_arbiter_->release_handshake_slot("weather.http");
+    network_arbiter_->release_handshake_slot("tempest.http");
   }
   if (open_err != ESP_OK) {
     ESP_LOGW(kTag, "HTTP open failed: %s", esp_err_to_name(open_err));

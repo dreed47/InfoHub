@@ -1,6 +1,6 @@
 # InfoHub
 
-InfoHub is a round/square ESP32-S3 info-display platform. Bambu Lab printer status is its flagship feature, but printer, weather and stocks are each an independently toggleable plugin — pick the combination you want at build time.
+InfoHub is a round/square ESP32-S3 info-display platform. Bambu Lab printer status is its flagship feature, but printer, weather (Tempest station or generic city/location) and stocks are each an independently toggleable plugin — pick the combination you want at build time.
 
 It works directly with Bambu Cloud, the printer's local connection, or both. Home Assistant is not required.
 
@@ -26,10 +26,11 @@ InfoHub is built as a set of independently Kconfig-toggleable plugins, not a fix
 | Plugin | Default | What it shows |
 | --- | --- | --- |
 | Printer (Bambu Lab) | On | Print progress, temperatures, AMS, camera, cover previews, controls |
-| Weather | Off | Current conditions + hourly forecast |
+| Tempest | Off | Current conditions + hourly forecast, for owners of a WeatherFlow Tempest station |
+| Weather (GeoWeather) | Off | Current conditions + hourly forecast for any city/location, via Open-Meteo — no API key needed |
 | Stocks | Off | Live quotes for up to 4 tracked symbols |
 
-Enable any combination when building from source (see [Building InfoHub](docs/Build/README.md)); the pre-built installer images ship with all three enabled.
+Enable any combination when building from source (see [Building InfoHub](docs/Build/README.md)); the pre-built installer images ship with all four enabled.
 
 ## Install InfoHub
 
@@ -100,7 +101,7 @@ The public installer performs the initial USB flash. OTA itself runs through Web
 - Configurable sound notifications and custom WAV files
 - Secure Web Config access using a temporary PIN
 - OTA firmware updates that retain the device configuration
-- Weather and stocks plugins for non-printer use cases
+- Weather (Tempest station or generic city/location) and stocks plugins for non-printer use cases
 
 ## Printer and camera support
 

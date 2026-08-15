@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-InfoHub: ESP32-S3 firmware (C17/C++17, ESP-IDF v5.5.4, LVGL v9.5.0) for a round/square touch display, built as a generic info-display platform — Bambu Lab 3D printer status (Bambu Cloud, local MQTT, or "hybrid" mode), weather, and stocks are each an independently Kconfig-toggleable plugin, not a fixed feature set. Two hardware variants share one codebase, selected at CMake configure time.
+InfoHub: ESP32-S3 firmware (C17/C++17, ESP-IDF v5.5.4, LVGL v9.5.0) for a round/square touch display, built as a generic info-display platform — Bambu Lab 3D printer status (Bambu Cloud, local MQTT, or "hybrid" mode), a WeatherFlow Tempest station ("Tempest"), generic city/location weather ("GeoWeather", via Open-Meteo, no API key), and stocks are each an independently Kconfig-toggleable plugin, not a fixed feature set. Two hardware variants share one codebase, selected at CMake configure time.
 
 ## Generic plugin platform
 
 This used to be a Bambu-only monolith; the extraction described below is done, not aspirational — treat this section as "what exists today," not a design sketch.
 
-ESP32-S3 has no OS-level dynamic loading, so "plugin" means a compile-time unit (own `main/src/plugins/<id>/*.cpp` + Kconfig toggle: `INFOHUB_PLUGIN_PRINTER` / `INFOHUB_PLUGIN_WEATHER` / `INFOHUB_PLUGIN_STOCKS`, all in `main/Kconfig.projbuild`), not a runtime-loaded `.so`. Printer defaults **on** (it's the flagship feature); weather/stocks default off. Disabling a plugin drops its source files from the build (`main/CMakeLists.txt`'s per-plugin `if(CONFIG_INFOHUB_PLUGIN_*)` blocks feeding `INFOHUB_PLUGIN_SRCS`/`INFOHUB_PLUGIN_EMBED_TXTFILES`) and the linker strips its now-unreferenced library code — disabling printer alone saves roughly a third of the flash image (MQTT client, JPEG decoder, Bambu TLS certs, error-lookup table all drop out).
+ESP32-S3 has no OS-level dynamic loading, so "plugin" means a compile-time unit (own `main/src/plugins/<id>/*.cpp` + Kconfig toggle: `INFOHUB_PLUGIN_PRINTER` / `INFOHUB_PLUGIN_TEMPEST` / `INFOHUB_PLUGIN_STOCKS` / `INFOHUB_PLUGIN_GEOWEATHER`, all in `main/Kconfig.projbuild`), not a runtime-loaded `.so`. Printer defaults **on** (it's the flagship feature); tempest/stocks/geoweather default off. Disabling a plugin drops its source files from the build (`main/CMakeLists.txt`'s per-plugin `if(CONFIG_INFOHUB_PLUGIN_*)` blocks feeding `INFOHUB_PLUGIN_SRCS`/`INFOHUB_PLUGIN_EMBED_TXTFILES`) and the linker strips its now-unreferenced library code — disabling printer alone saves roughly a third of the flash image (MQTT client, JPEG decoder, Bambu TLS certs, error-lookup table all drop out).
 
 Small caveat worth knowing if you ever touch `main/CMakeLists.txt`: `REQUIRES`/`PRIV_REQUIRES` **cannot** be gated behind `CONFIG_INFOHUB_PLUGIN_*` — ESP-IDF evaluates each component's `CMakeLists.txt` twice, and `CONFIG_*` Kconfig variables aren't populated during the first (dependency-graph) pass, so a gated `REQUIRES` breaks the build regardless of the option's value (confirmed empirically, not a guess). `mqtt`/`espressif__esp_new_jpeg` stay in the unconditional `REQUIRES` list; only `SRCS`/`EMBED_TXTFILES` gating works, and that's sufficient since the linker still strips the dead code.
 
@@ -34,13 +34,14 @@ struct PluginContext {
   SetupPortal& setup_portal;
   PmuManager& pmu_manager;
   AudioNotifier& audio_notifier;
+  NetworkArbiter& network_arbiter;  // shared handshake-serialization slot — see NetworkArbiter section
 };
 
 class Plugin {
  public:
   virtual ~Plugin() = default;
 
-  // e.g. "printer", "weather" — also doubles as the ConfigStore NVS
+  // e.g. "printer", "tempest" — also doubles as the ConfigStore NVS
   // namespace for this plugin's own settings, so must be <= 15 chars.
   virtual const char* id() const = 0;
   virtual const char* display_name() const = 0;
@@ -62,7 +63,7 @@ class Plugin {
   // reserved in Ui's generic plugin-page pool. 0 (default) means tile-only.
   // Fixed per plugin type at compile time. Printer reports 8 (1 select +
   // kMaxAmsUnits + main/preview/camera) and is a real, uniform pool entry —
-  // no special-cased slot, same mechanism weather/stocks use.
+  // no special-cased slot, same mechanism tempest/stocks/geoweather use.
   virtual uint8_t page_count() const { return 0; }
 
   virtual void build_tile(lv_obj_t* parent) = 0;
@@ -106,11 +107,14 @@ Registration is a flat array built directly in `Application`'s constructor (`mai
 #if CONFIG_INFOHUB_PLUGIN_PRINTER
   plugins_[0] = &printer_plugin_;
 #endif
-#if CONFIG_INFOHUB_PLUGIN_WEATHER
-  plugins_[1] = &weather_plugin_;
+#if CONFIG_INFOHUB_PLUGIN_TEMPEST
+  plugins_[1] = &tempest_plugin_;
 #endif
 #if CONFIG_INFOHUB_PLUGIN_STOCKS
   plugins_[2] = &stocks_plugin_;
+#endif
+#if CONFIG_INFOHUB_PLUGIN_GEOWEATHER
+  plugins_[3] = &geoweather_plugin_;
 #endif
 ```
 
@@ -135,7 +139,7 @@ uint8_t     load_plugin_record_count(const char* plugin_ns) const;
 esp_err_t   save_plugin_record_count(const char* plugin_ns, uint8_t count) const;
 ```
 
-`plugin_ns` (== `Plugin::id()`) must be ≤ 15 chars — ESP-IDF NVS's hard cap on namespace/key strings, which is exactly why this is a per-plugin *namespace* rather than a dotted-key scheme like `"plugin.weather.city"` (that would blow the 15-char key limit immediately). Weather/stocks/printer's own `enabled` flag and settings all go through this already (`config_store_->load_plugin_string(id(), "enabled")` etc.) — this isn't a sketch, it's load-bearing for all three shipped plugins.
+`plugin_ns` (== `Plugin::id()`) must be ≤ 15 chars — ESP-IDF NVS's hard cap on namespace/key strings, which is exactly why this is a per-plugin *namespace* rather than a dotted-key scheme like `"plugin.geoweather.city"` (that would blow the 15-char key limit immediately). Tempest/stocks/geoweather/printer's own `enabled` flag and settings all go through this already (`config_store_->load_plugin_string(id(), "enabled")` etc.) — this isn't a sketch, it's load-bearing for all four shipped plugins.
 
 ### Ui / UiShell (implemented)
 
@@ -167,7 +171,7 @@ for (Plugin* plugin : plugins_) {
 
 Page-active/visible queries are one generic method, not printer-named ones: `bool Ui::is_plugin_page_active(const char* plugin_id, int local_idx) const` / `is_plugin_page_visible(...)`, resolved through `UiShell::plugin_page_range(plugin_id, &base, &count)`. Printer's own `tick()`/`update_ui()` call these with `"printer"` + its own local indices — Ui has no idea what "the camera page" or "the preview page" means.
 
-`LvglLockGuard` (moved to `ui_toolkit.{hpp,cpp}` as a shared primitive) wraps every LVGL API touch made from a non-LVGL-task context — **any plugin's `build_screen()`/`update_ui()` implementation must acquire this before touching LVGL objects.** This bit InfoHub for real during printer's own extraction: the widget-construction code used to get the lock for free from `Ui::build_dashboard()`'s own wrapper; moving it into `PrinterPlugin::build_screen()` without bringing the lock along let it race LVGL's render task and hang boot (LVGL's own `"invalidate area is not allowed during rendering"` assert, silently continuing into a corrupted-state infinite loop rather than aborting). Root-caused via on-device serial debugging — `ESP_LOGI`'s buffered output was getting lost the instant the hang started, needed raw `esp_rom_printf` to actually see the crash site. Fixed now, but weather/stocks' own `build_screen()` implementations have the same *missing*-lock pattern today — they just haven't hit the race in practice (smaller/simpler widget trees). Known latent risk, not yet hardened.
+`LvglLockGuard` (moved to `ui_toolkit.{hpp,cpp}` as a shared primitive) wraps every LVGL API touch made from a non-LVGL-task context — **any plugin's `build_screen()`/`update_ui()` implementation must acquire this before touching LVGL objects.** This bit InfoHub for real during printer's own extraction: the widget-construction code used to get the lock for free from `Ui::build_dashboard()`'s own wrapper; moving it into `PrinterPlugin::build_screen()` without bringing the lock along let it race LVGL's render task and hang boot (LVGL's own `"invalidate area is not allowed during rendering"` assert, silently continuing into a corrupted-state infinite loop rather than aborting). Root-caused via on-device serial debugging — `ESP_LOGI`'s buffered output was getting lost the instant the hang started, needed raw `esp_rom_printf` to actually see the crash site. Fixed now, but tempest/stocks/geoweather's own `build_screen()` implementations have the same *missing*-lock pattern today — they just haven't hit the race in practice (smaller/simpler widget trees). Known latent risk, not yet hardened.
 
 **Still-parked, no live bug forcing it:** the home screen is still a flat pager (first-registered plugin's page 0 is what you land on, not a tile/carousel home screen) — `Plugin::build_tile()` exists on the interface but nothing calls it yet. Revisit only if a future plugin actually needs a tile-grid home screen.
 
@@ -175,13 +179,13 @@ Page-active/visible queries are one generic method, not printer-named ones: `boo
 
 `SetupPortal`'s constructor no longer takes any plugin-specific reference — `SetupPortal(ConfigStore&, const WifiManager&, Ui&, const PmuManager&, AudioNotifier&)`, plus `start(const std::array<Plugin*, kMaxPlugins>& plugins)`. Where it needs printer-specific status (two read-only display handlers, `handle_root`/`handle_health`), it looks the plugin up by id from the array it already has (`Plugin* printer_plugin() const` — linear scan for `id() == "printer"`), same pattern `is_provisioning_complete()` already used for the generic "is any plugin still unconfigured" check. No plugin gets a hardcoded reference-typed member.
 
-Route registration is fully generic — `for (Plugin* plugin : plugins) plugin->register_portal_routes(server_);` — every plugin (printer included) registers its own routes under `/api/plugins/<id>/*` via its own handler, in its own translation unit (`printer_plugin_portal.cpp`, `weather_plugin_portal.cpp`, `stocks_plugin_portal.cpp`). The old `/api/config` god-endpoint that used to string-concatenate every subsystem's settings into one blob is gone — `handle_config_get`/`handle_config_post` are core-only now (wifi/display/battery/audio/arc-color/filament/timezone/portal-lock), no plugin fields.
+Route registration is fully generic — `for (Plugin* plugin : plugins) plugin->register_portal_routes(server_);` — every plugin (printer included) registers its own routes under `/api/plugins/<id>/*` via its own handler, in its own translation unit (`printer_plugin_portal.cpp`, `tempest_plugin_portal.cpp`, `stocks_plugin_portal.cpp`, `geoweather_plugin_portal.cpp`). The old `/api/config` god-endpoint that used to string-concatenate every subsystem's settings into one blob is gone — `handle_config_get`/`handle_config_post` are core-only now (wifi/display/battery/audio/arc-color/filament/timezone/portal-lock), no plugin fields.
 
-**Not done, no live need for it:** `handle_root`'s settings-page HTML is still one big hand-written C++ string with an `#if CONFIG_INFOHUB_PLUGIN_*`-guarded block per plugin (mirrors weather/stocks, which were built this way from the start) — it does *not* generically loop `plugin->portal_settings_html()`. That virtual method exists on the interface and every plugin overrides it to return `{}`; it's dead code. Building a real generic HTML-fragment mechanism was considered and explicitly deferred (smaller diff, consistent with how weather/stocks already work) — revisit only if a 4th plugin makes the hand-written-block pattern genuinely painful.
+**Not done, no live need for it:** `handle_root`'s settings-page HTML is still one big hand-written C++ string with an `#if CONFIG_INFOHUB_PLUGIN_*`-guarded block per plugin (mirrors tempest/stocks, which were built this way from the start) — it does *not* generically loop `plugin->portal_settings_html()`. That virtual method exists on the interface and every plugin overrides it to return `{}`; it's dead code. Building a real generic HTML-fragment mechanism was considered and explicitly deferred (smaller diff, consistent with how tempest/stocks already work) — geoweather followed the same pattern rather than revisiting it.
 
 ### Application (implemented)
 
-`Application` (`main/include/infohub/application.hpp`, `main/src/application.cpp`) owns only core services plus the plugin array — `config_store_`, `wifi_manager_`, `ui_`, `pmu_manager_`, `audio_notifier_`, `setup_portal_`, `serial_provisioner_`, `std::array<Plugin*, kMaxPlugins> plugins_`. `printer_plugin_`/`weather_plugin_`/`stocks_plugin_` members are each `#if CONFIG_INFOHUB_PLUGIN_*`-guarded; nothing printer-specific exists unconditionally on this class.
+`Application` (`main/include/infohub/application.hpp`, `main/src/application.cpp`) owns only core services plus the plugin array — `config_store_`, `wifi_manager_`, `ui_`, `pmu_manager_`, `audio_notifier_`, `setup_portal_`, `serial_provisioner_`, `std::array<Plugin*, kMaxPlugins> plugins_`. `printer_plugin_`/`tempest_plugin_`/`stocks_plugin_`/`geoweather_plugin_` members are each `#if CONFIG_INFOHUB_PLUGIN_*`-guarded; nothing printer-specific exists unconditionally on this class.
 
 `run()`'s core `while (true)` loop, every iteration:
 
@@ -206,7 +210,7 @@ Battery being pushed here directly (not laundered through any plugin's snapshot 
 
 ### AudioNotifier and error_lookup (partially generalized)
 
-`AudioNotifier`'s original 8-slot `Event` enum (`kPrintStarted`/`kPrintFinished`/.../`kReconnect`/`kClick`) is unchanged and still positionally NVS-indexed — explicitly "do not renumber" per its own header comment. On top of that, `register_event(const char* stable_key, bool default_enabled)` now exists for *new* dynamically-registered events beyond the fixed 8 (`kMaxEvents = 32` cap), persisted by `stable_key` rather than ordinal, plus a `play(uint8_t event_id)` overload alongside the original `play(Event)`. So: the printer plugin's original 8 events are still enum-ordinal-based (untouched, for NVS migration safety), but a plugin wanting its *own* new events (weather severe-alert, say) has a real, working path that doesn't require touching the closed enum. Not the full "replace the enum" sketch once written here — a coexistence model instead, and it's shipped/load-bearing, not aspirational.
+`AudioNotifier`'s original 8-slot `Event` enum (`kPrintStarted`/`kPrintFinished`/.../`kReconnect`/`kClick`) is unchanged and still positionally NVS-indexed — explicitly "do not renumber" per its own header comment. On top of that, `register_event(const char* stable_key, bool default_enabled)` now exists for *new* dynamically-registered events beyond the fixed 8 (`kMaxEvents = 32` cap), persisted by `stable_key` rather than ordinal, plus a `play(uint8_t event_id)` overload alongside the original `play(Event)`. So: the printer plugin's original 8 events are still enum-ordinal-based (untouched, for NVS migration safety), but a plugin wanting its *own* new events (Tempest rain-start/rain-stop or lightning-detected tones, say — future work, deliberately not wired up yet, and deliberately Tempest-only, not GeoWeather's concern) has a real, working path that doesn't require touching the closed enum. Not the full "replace the enum" sketch once written here — a coexistence model instead, and it's shipped/load-bearing, not aspirational.
 
 `error_lookup` (HMS/print-error code → human string, Bambu-specific top to bottom) now lives under `plugins/printer/error_lookup.{hpp,cpp}`, and its `EMBED_TXTFILES` entry (plus the 4 Bambu TLS certs) is conditional on `CONFIG_INFOHUB_PLUGIN_PRINTER` in `main/CMakeLists.txt` — this was the literal "not yet gated" comment in this file that prompted the whole plugin-optionality effort; it's resolved now.
 
@@ -253,7 +257,7 @@ python tools/package_initial_flash.py --build-dir build-lcd_2_8c --release-root 
 
 ## Plugin selection
 
-`idf.py -B <build-dir> menuconfig` → "InfoHub" submenu → `INFOHUB_PLUGIN_PRINTER` / `INFOHUB_PLUGIN_WEATHER` / `INFOHUB_PLUGIN_STOCKS` (printer defaults on, weather/stocks default off). Each toggle is independent of `INFOHUB_HW_VARIANT` — any combination builds on either hardware variant. To flip a toggle non-interactively (e.g. scripting a second test build without touching the main `sdkconfig`), point a separate build at its own sdkconfig file:
+`idf.py -B <build-dir> menuconfig` → "InfoHub" submenu → `INFOHUB_PLUGIN_PRINTER` / `INFOHUB_PLUGIN_TEMPEST` / `INFOHUB_PLUGIN_STOCKS` / `INFOHUB_PLUGIN_GEOWEATHER` (printer defaults on, the other three default off). Each toggle is independent of `INFOHUB_HW_VARIANT` — any combination builds on either hardware variant. To flip a toggle non-interactively (e.g. scripting a second test build without touching the main `sdkconfig`), point a separate build at its own sdkconfig file:
 
 ```bash
 idf.py -B build-test -DSDKCONFIG=build-test/sdkconfig -DINFOHUB_HW_VARIANT=amoled_1_75 reconfigure
@@ -290,7 +294,7 @@ Single FreeRTOS task (`infohub_app`, `app_main.cpp`) runs `infohub::Application:
 
 `PrinterModel` (`printer_state.hpp`) drives per-model capability queries (`printer_model_has_*`, `default_local_capabilities_for_model`) used throughout `status_resolver` and the clients.
 
-**Weather/stocks plugins** (`main/include/infohub/plugins/weather/`, `main/src/plugins/weather/`; same shape under `plugins/stocks/`) — much smaller, each roughly: one HTTP-polling client class, `<id>_plugin.{hpp,cpp}` for lifecycle/tick/widgets, `<id>_plugin_portal.cpp` for its own routes. Good reference for a new plugin's shape — closer to what a plugin "should" look like than printer's much larger, historically-grown footprint.
+**Tempest/stocks/geoweather plugins** (`main/include/infohub/plugins/tempest/`, `main/src/plugins/tempest/`; same shape under `plugins/stocks/` and `plugins/geoweather/`) — much smaller, each roughly: one HTTP-polling client class, `<id>_plugin.{hpp,cpp}` for lifecycle/tick/widgets, `<id>_plugin_portal.cpp` for its own routes. Good reference for a new plugin's shape — closer to what a plugin "should" look like than printer's much larger, historically-grown footprint. Tempest talks to WeatherFlow's cloud API for one physical Tempest station (station ID + API token); GeoWeather is the generic, no-hardware, no-API-key alternative — free-text location resolved via Open-Meteo's geocoding API, then polled via Open-Meteo's forecast API. Both currently ship the same 2-page layout (current conditions + 4-hour forecast strip), but Tempest is the one slated for future hardware-specific sound events (rain start/stop, lightning detected) that don't make sense for a generic location.
 
 ## Conventions
 
