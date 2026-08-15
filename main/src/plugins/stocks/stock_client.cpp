@@ -273,11 +273,16 @@ void StockClient::task_loop() {
     const bool due = !has_fetched_once || just_reconfigured || schedule_due;
 
     if (configured && due && wifi_ready) {
-      has_fetched_once = true;
       if (due_slot_ts > last_fetch_slot_ts) {
         last_fetch_slot_ts = due_slot_ts;
       }
-      fetch_once();
+      // Only latch has_fetched_once on a fetch that actually got at least one
+      // symbol's data -- a total failure (e.g. every symbol denied the
+      // NetworkArbiter handshake slot during boot-time contention with other
+      // plugins) must keep `due` true so the next loop wake (30s) retries,
+      // rather than stranding stocks unfetched until the next schedule slot,
+      // hours away.
+      has_fetched_once = fetch_once();
     }
 
     if (!configured) {
