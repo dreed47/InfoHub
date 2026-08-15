@@ -27,7 +27,7 @@ InfoHub is built as a set of independently Kconfig-toggleable plugins, not a fix
 | Printer (Bambu Lab) | On | Print progress, temperatures, AMS, camera, cover previews, controls |
 | Tempest | Off | Current conditions + hourly forecast, for owners of a WeatherFlow Tempest station |
 | Weather (GeoWeather) | Off | Current conditions + hourly forecast for any city/location, via Open-Meteo — no API key needed |
-| Stocks | Off | Live quotes for up to 4 tracked symbols |
+| Stocks | Off | Live quotes for up to 4 tracked symbols, with a configurable daily API-request budget and last-refreshed display |
 
 Enable any combination when building from source (see [Building InfoHub](docs/Build/README.md)); the pre-built installer images ship with all four enabled.
 
