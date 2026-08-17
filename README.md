@@ -3,7 +3,7 @@
 InfoHub is a round/square ESP32-S3 info-display platform. Bambu Lab printer status is its flagship feature, but printer, weather (Tempest station or generic city/location) and stocks are each an independently toggleable plugin — pick the combination you want at build time.
 
 
-![Mount](docs/1.png)
+![Four square InfoHub display housings arranged on a yellow work surface, with a pink unit in the foreground, a dark green unit behind it, a light gray unit to the right, and a dark navy unit at the back. Each housing has a circular screen with a glowing purple ring on a black face, showing the weather readout 77.9°F, Thunderstorms Possible, 75% RH, and 9976.6 mb. A cable is visible along the lower left edge. The scene feels like a clean product showcase in a workshop or studio setting.](docs/pic1.jpg)
 
 Current version: **Alpha v0.1.0**
 
